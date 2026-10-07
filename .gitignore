@@ -1,0 +1,57 @@
+# 发布与分发构建产物（禁止就地编辑）
+publish/
+
+# 打包输出（tools/package.py 生成，收件人自行解压）
+dist/
+
+# PyInstaller 构建中间产物（tools/build-updater-exe.py）
+build/
+
+# 安装器的 Node 依赖与打包产物
+# Electron 二进制约 180 MB，且由 npm install 重建，绝不入库。
+# 用通配而非逐个列举：打包目录会不断增加（dist-exe、dist-portable、…），
+# 写死名字就会漏掉下一个。本仓库已经因此两次把 180 MB 产物算进包里。
+installer/node_modules/
+installer/dist-*/
+installer/*.log
+installer/*.log.err
+
+# 本地缓存与临时文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.DS_Store
+Thumbs.db
+
+# 生成的 catalog 索引（可用 tools/build-sc2-catalog-graph.py 重建）
+sc2-catalog-graph-out/
+
+# 暴雪游戏数据导出（166 MB / 2490 文件）。
+# 不是本项目的代码，不作为本仓库内容分发——用户从 release 的 data.zip 获取，
+# 安装器按哈希判断是否需要应用。tools/release.py 仍从本地磁盘读取它来构建该包。
+DataEditorXML/
+
+# 本地试玩提取日志
+bugreport.txt
+
+# 本地备份与临时工作文件
+backups/
+tmp/
+.sc2-reference-stage-*/
+.sc2-reference-backup-*/
+
+# 本机路径配置（不同机器路径不同，不进版本库）
+agent-config.json
+
+# Workspace reset recovery archive
+.workspace-recovery/
+
+# Generated validation reports and staged publication/previous versions
+reports/
+**/.*.stage-*/
+**/.*.sc2-previous/
+**/.*.sc2-previous.owner.json
+**/.*.sc2-retired-*/
+**/.*.sc2-publish.lock/

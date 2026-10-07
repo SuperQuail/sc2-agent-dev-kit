@@ -1,0 +1,17 @@
+# Configuration for the tools that read it.
+#
+# This repository is a kit that ships as a zip, not a Python distribution: tools/
+# is a flat directory whose module names contain hyphens
+# (build-sc2-catalog-graph.py), so it is deliberately not installable and there is
+# no [project] table pretending otherwise.
+#
+# The project version has exactly one source of truth: tools/sc2_version.py.
+# The packager stamps it into the archive name and the release manifest, the
+# updater compares it against an installed copy, and the CLI prints it with
+# "python tools/sc2.py --version".  Bump it there and nowhere else.
+
+[tool.pytest.ini_options]
+testpaths = ["tools/tests"]
+addopts = "-q"
+# The suite is unittest.TestCase classes that bootstrap sys.path themselves, so
+# no import-mode or pythonpath trickery is required.
