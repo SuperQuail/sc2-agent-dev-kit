@@ -130,10 +130,30 @@ node installer/cli.js install --from <来源> --dry-run           # 什么都不
 ## 7. 发布流程
 
 ```bash
-# 1. 改 tools/sc2_version.py 的 VERSION
-# 2. python tools/release.py --write
-# 3. 把 dist/release/<version>/ 下三个文件传到 GitHub release，tag 用 v<version>
+# 1. 改 tools/sc2_version.py 的 VERSION，并同步 installer/package.json 的 version
+#    （npm 只接受合法 semver，所以 0.1.0a1 在这里写作 0.1.0-a1）
+
+# 2. 构建三个数据产物
+python tools/release.py --write
+
+# 3. 构建安装器 exe —— release.py 不管这一步，最容易漏
+cd installer
+npx electron-builder --win portable --config.win.signAndEditExecutable=false
+cd ..
+
+# 4. 四个文件一起传，tag 用 v<version>
+gh release create v<version> \
+  dist/release/<version>/StarCraftIIAgent-<version>-core.zip \
+  dist/release/<version>/StarCraftIIAgent-<version>-data.zip \
+  dist/release/<version>/StarCraftIIAgent-<version>-manifest.json \
+  installer/dist-portable/SC2Agent-Installer-<semver>.exe \
+  --title '...' --notes-file <说明文件> --prerelease
 ```
+
+> **exe 必须进 release。** 0.1.0a1 首发时就漏了它——命令行用户有 core.zip 可用，
+> 但非技术用户拿到 core.zip 无从下手，而 exe 才是双击即用的入口。
+> `release.py` 是纯 Python 的，构建 exe 需要 Node 与 electron-builder，
+> 两者刻意分开；代价就是这一步必须手动记住。
 
 发布前自检（`release.py` 会拒绝打包 `agent-config.json`，那是机器专属配置）：
 

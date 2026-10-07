@@ -1,6 +1,6 @@
 {
   "name": "sc2agent-installer",
-  "version": "0.2.0",
+  "version": "0.1.0-a1",
   "private": true,
   "description": "StarCraftIIAgent 安装器：把套件装到本机，并把技能交付给 DeepSeek Harness / Claude Code / Codex / opencode",
   "author": "扯蛋虾米",
