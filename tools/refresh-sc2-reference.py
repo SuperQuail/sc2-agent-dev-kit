@@ -15,6 +15,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sc2_util import digest_file as digest  # noqa: E402
 
+
+# Printing Chinese on a console that cannot encode it (an English Windows runner,
+# for example) raises UnicodeEncodeError and kills the tool.  sc2_console points
+# stdio at UTF-8 with errors="replace", so a stray glyph degrades to "?" instead
+# of a traceback.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sc2_console import enable_utf8_output  # noqa: E402
+
+enable_utf8_output()
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGET = ROOT / "DataEditorXML" / "SC2GameDataComponents"
 SELECTIONS = ("Base.SC2Data/GameData", "enUS.SC2Data", "zhCN.SC2Data")

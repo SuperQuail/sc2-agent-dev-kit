@@ -15,6 +15,13 @@ TOOL_REF_RE = re.compile(r"(?<![\w/])tools/[A-Za-z0-9_.-]+\.py")
 SKIP_PARTS = {".git", "publish", "sc2-catalog-graph-out", ".workspace-recovery",
               "node_modules", "dist", "build", "DataEditorXML", "__pycache__"}
 
+# Trees a clone does not contain, so a link into them is not a broken link.
+# DataEditorXML is Blizzard game data shipped as a release asset rather than
+# repository content: the link resolves for anyone who installed the data pack,
+# and cannot resolve for anyone who has not.  Flagging it would make CI red on
+# every clone while telling nobody anything actionable.
+NOT_SHIPPED = {"DataEditorXML", "dist", "build", "node_modules"}
+
 
 def markdown_files(root: Path):
     for path in root.rglob("*.md"):
@@ -56,6 +63,8 @@ def main() -> int:
                     continue
                 target = Path(target_text)
                 resolved = target if target.is_absolute() else source.parent / target
+                if NOT_SHIPPED.intersection(resolved.resolve().parts):
+                    continue
                 if not resolved.exists():
                     failures.append(
                         f"{source.relative_to(root)}:{line_no}: missing {match.group(1)}"

@@ -29,6 +29,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+# Printing Chinese on a console that cannot encode it (an English Windows runner,
+# for example) raises UnicodeEncodeError and kills the tool.  sc2_console points
+# stdio at UTF-8 with errors="replace", so a stray glyph degrades to "?" instead
+# of a traceback.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sc2_console import enable_utf8_output  # noqa: E402
+
+enable_utf8_output()
+
 WORKSPACE = Path(__file__).resolve().parents[1]
 CONFIG = WORKSPACE / "agent-config.json"
 
