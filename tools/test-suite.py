@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from sc2_dependencies import build_dependency_graph, resolve_dependency_root, dependency_problems
+from sc2_temp import normalise_temp_root, normalised_environ
 from sc2_paths import (
     config_path,
     find_project_mods,
@@ -69,7 +70,13 @@ def dependency_validation_targets(
 def run_step(name: str, cmd: list[str], verbose: bool) -> bool:
     print(f"--> Running {name}...")
     start = time.time()
-    res = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
+    # Hand the child a canonical temp root.  unittest discover does not read
+    # conftest.py, so without this the unit tests see GitHub's 8.3 short TMP while
+    # the code under test resolves to the long form, and every path assertion fails.
+    res = subprocess.run(
+        cmd, cwd=str(REPO_ROOT), capture_output=True, text=True,
+        env=normalised_environ(),
+    )
     elapsed = time.time() - start
     if res.returncode == 0:
         print(f"    [PASS] {name} ({elapsed:.2f}s)")
@@ -130,6 +137,9 @@ def main() -> int:
         help="Component mod folder name to exclude from dependency validation (repeatable).",
     )
     args = parser.parse_args()
+
+    # Normalise before any child is spawned; see sc2_temp for why.
+    normalise_temp_root()
 
     if args.scope in {"tools", "docs"}:
         scoped_steps = (
