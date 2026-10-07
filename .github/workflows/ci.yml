@@ -1,17 +1,31 @@
 name: CI
 
-# Everything here runs without a configured StarCraft II project.  The full
-# "python tools/test-suite.py" needs agent-config.json and an installed mod, so it
-# is intentionally not part of CI - it is the local pre-flight gate instead.
+# Runs on Windows on purpose.
+#
+# This kit drives the StarCraft II Editor, shells out to PowerShell and curl.exe, and
+# ships .exe binaries - SC2 modding is a Windows workflow.  The path handling under test
+# (sc2_paths.py, init-project.py, deploy-mod.py) operates on Windows drive-letter paths
+# like E:/Games/StarCraft II/Mods; on Linux, Path.resolve() treats that as a relative path
+# and every path assertion fails for reasons that cannot happen for a real user.
+#
+# Everything here runs WITHOUT a configured StarCraft II project.  The full
+# "python tools/test-suite.py" needs agent-config.json and an installed mod, so it is
+# intentionally not part of CI - it is the local pre-flight gate instead.
 
 on:
   push:
+    branches: [main, dev]
   pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
@@ -37,5 +51,8 @@ jobs:
           python tools/audit-skill-frontmatter.py
           python tools/check-doc-links.py
 
-      - name: Package dry run (portability scan)
-        run: python tools/package.py --quiet
+      - name: Static rules
+        run: python tools/sc2.py check .
+
+      - name: Release build dry run
+        run: python tools/release.py
