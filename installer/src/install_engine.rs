@@ -36,7 +36,8 @@ pub fn run_plan(from: String, root: PathBuf, proxy: Option<String>, rep: Reporte
     let result = (|| -> Result<PlanInfo, String> {
         rep.send(Msg::Phase("解析来源".into()));
         let mut say = |s: String| rep.send(Msg::Log(s));
-        let r = source::resolve(&from, proxy.as_deref(), &mut say)?;
+        // 预演不写任何文件，所以只取清单，不把 20 MB 的包也拖下来。
+        let r = source::resolve(&from, proxy.as_deref(), false, &mut say)?;
         let kit = root.join(KIT_DIR);
         rep.send(Msg::Phase("核对文件".into()));
         let core = diff_files(&kit, &r.manifest.files.core);
@@ -82,7 +83,7 @@ pub fn run_install(
     let out = (|| -> Result<Summary, String> {
         rep.send(Msg::Phase("解析来源".into()));
         let mut say = |s: String| rep.send(Msg::Log(s));
-        let r = source::resolve(&from, proxy.as_deref(), &mut say)?;
+        let r = source::resolve(&from, proxy.as_deref(), true, &mut say)?;
         let manifest: &Manifest = &r.manifest;
         let kit = root.join(KIT_DIR);
         std::fs::create_dir_all(&kit).map_err(|e| format!("建不了套件目录：{e}"))?;

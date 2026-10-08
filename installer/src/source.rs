@@ -100,45 +100,146 @@ fn is_github_shorthand(s: &str) -> bool {
     parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty()
 }
 
-fn resolve_github(from: &str, proxy: Option<&str>, say: &mut dyn FnMut(String)) -> Result<PathBuf, String> {
+/// GitHub API 每小时只允许 60 次未认证请求，触发 403 时改用 release 页面解析。
+///
+/// 页面路径 https://github.com/<repo>/releases/expanded_assets/<tag> 是 GitHub 给
+/// 惰性加载用的纯 HTML 片段，不受 API 限流，链接形如 /owner/repo/releases/download/tag/name。
+fn assets_from_page(repo: &str, tag: &str, proxy: Option<&str>) -> Result<Vec<(String, String)>, String> {
+    let url = format!("https://github.com/{repo}/releases/expanded_assets/{tag}");
+    let html = fetch(&url, proxy)?;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for part in html.split("href=\"") {
+        let Some(end) = part.find('"') else { continue };
+        let href = &part[..end];
+        if !href.contains("/releases/download/") {
+            continue;
+        }
+        let Some(name) = href.rsplit('/').next() else { continue };
+        if name.is_empty() || out.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        out.push((name.to_string(), format!("https://github.com{href}")));
+    }
+    if out.is_empty() {
+        return Err("release 页面里没有找到可下载的资产".into());
+    }
+    Ok(out)
+}
+
+/// 跟随重定向拿到最终 URL，用来把 latest 解析成具体 tag。
+fn effective_url(url: &str, proxy: Option<&str>) -> Result<String, String> {
+    let mut a: Vec<String> = vec!["-sSL".into(), "-o".into(), "NUL".into(), "-w".into(), "%{url_effective}".into()];
+    if let Some(p) = proxy.filter(|p| !p.trim().is_empty()) {
+        a.push("--proxy".into());
+        a.push(p.trim().to_string());
+    }
+    a.push(url.into());
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(&a);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().map_err(|e| format!("无法启动 curl.exe：{e}"))?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn wanted(name: &str) -> bool {
+    name.ends_with("-manifest.json") || name.ends_with("-core.zip") || name.ends_with("-data.zip")
+}
+fn resolve_github(
+    from: &str,
+    proxy: Option<&str>,
+    want_artifacts: bool,
+    say: &mut dyn FnMut(String),
+) -> Result<PathBuf, String> {
     let s = from.trim();
-    let (repo, tag) = match s.split_once('@') {
-        Some((r, t)) => (r.trim_start_matches("https://github.com/"), Some(t)),
+    let (repo, tag_opt) = match s.split_once('@') {
+        Some((r, t)) => (r.trim_start_matches("https://github.com/"), Some(t.to_string())),
         None => (s.trim_start_matches("https://github.com/"), None),
     };
-    let repo = repo.trim_end_matches('/');
-    let api = match tag {
-        Some(t) => format!("https://api.github.com/repos/{repo}/releases/tags/{t}"),
-        None => format!("https://api.github.com/repos/{repo}/releases/latest"),
+    let repo = repo
+        .trim_end_matches('/')
+        .trim_end_matches("/releases")
+        .to_string();
+
+    // 先把 tag 定下来：没给就从 latest 的重定向里取。
+    let tag = match tag_opt {
+        Some(t) => t,
+        None => effective_url(&format!("https://github.com/{repo}/releases/latest"), proxy)?
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
     };
-    say(format!("解析 GitHub release：{api}"));
-    let body = fetch(&api, proxy)?;
-    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("release JSON 解析失败：{e}"))?;
-    let assets = v.get("assets").and_then(|a| a.as_array()).cloned().unwrap_or_default();
-    if assets.is_empty() {
-        return Err("该 release 没有任何资产".into());
+    if tag.is_empty() {
+        return Err("无法确定 release 版本".into());
     }
+
     let tmp = std::env::temp_dir().join(format!("sc2agent-gh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| format!("建不了临时目录：{e}"))?;
-    for a in assets {
-        let name = a.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-        let url = a.get("browser_download_url").and_then(|u| u.as_str()).unwrap_or_default();
-        let wanted = name.ends_with("-manifest.json")
-            || name.ends_with("-core.zip")
-            || name.ends_with("-data.zip");
-        if !wanted || url.is_empty() {
+
+    // 优先走 API。未认证的 API 每小时只有 60 次，触发 403 是常态，于是回退到页面解析。
+    say(format!("解析 GitHub release：{repo}@{tag}"));
+    let api = format!("https://api.github.com/repos/{repo}/releases/tags/{tag}");
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let api_result = fetch(&api, proxy).and_then(|body| {
+        let v: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("release JSON 解析失败：{e}"))?;
+        let assets = v
+            .get("assets")
+            .and_then(|a| a.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(assets
+            .into_iter()
+            .filter_map(|a| {
+                let name = a.get("name")?.as_str()?.to_string();
+                let url = a.get("browser_download_url")?.as_str()?.to_string();
+                Some((name, url))
+            })
+            .collect::<Vec<_>>())
+    });
+    match api_result {
+        Ok(list) if list.iter().any(|(n, _)| wanted(n)) => pairs = list,
+        Ok(_) => say("API 返回的资产里没有我们要的包，改用页面解析".into()),
+        Err(e) => {
+            say(format!("API 不可用：{e}"));
+            say("改用 release 页面解析（未认证 API 限流为每小时 60 次）".into());
+        }
+    }
+    if pairs.is_empty() {
+        pairs = assets_from_page(&repo, &tag, proxy)?;
+    }
+
+    // 预演只需要清单。把 20 MB 的包也拖下来只为读一个哈希，是纯粹的浪费。
+    let interesting = |n: &str| {
+        if want_artifacts {
+            wanted(n)
+        } else {
+            n.ends_with("-manifest.json")
+        }
+    };
+    let mut got = 0usize;
+    for (name, url) in &pairs {
+        if !interesting(name) {
             continue;
         }
         say(format!("下载 {name}"));
         download(url, &tmp.join(name), proxy)?;
+        got += 1;
+    }
+    if got == 0 {
+        return Err(format!("{repo}@{tag} 里没有 core/data/manifest 资产"));
     }
     Ok(tmp)
 }
 
 /// 把来源字符串解析成一个含清单的本地目录。
+/// want_artifacts 为 false 时只取清单，用于「预演」——它不写任何文件，也就用不着包体。
 pub fn resolve(
     from: &str,
     proxy: Option<&str>,
+    want_artifacts: bool,
     say: &mut dyn FnMut(String),
 ) -> Result<Resolved, String> {
     let from = from.trim();
@@ -177,7 +278,7 @@ pub fn resolve(
     }
 
     if is_github_shorthand(from) {
-        let dir = resolve_github(from, proxy, say)?;
+        let dir = resolve_github(from, proxy, want_artifacts, say)?;
         let manifest = read_manifest(&dir)?;
         return Ok(Resolved { dir, manifest });
     }
