@@ -132,14 +132,13 @@ pub fn run_install(
         let stage = root.join(format!(".stage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&stage);
         std::fs::create_dir_all(&stage).map_err(|e| format!("建暂存目录失败：{e}"))?;
-        let core_zip = r.dir.join(
-            manifest
-                .artifacts
-                .core
-                .file
-                .clone()
-                .ok_or("清单里没有 core 包名")?,
-        );
+        let core_name = manifest
+            .artifacts
+            .core
+            .file
+            .clone()
+            .ok_or("清单里没有 core 包名")?;
+        let core_zip = source::fetch_asset(&r.dir, &r.assets, &core_name, &settings, &mut say)?;
         extract_zip(&core_zip, &stage, &mut |name| bump(name, &mut done))?;
         for e in std::fs::read_dir(&stage).map_err(|e| e.to_string())?.filter_map(Result::ok) {
             let to = kit.join(e.file_name());
@@ -165,7 +164,10 @@ pub fn run_install(
                     let ds = root.join(format!(".stage-data-{}", std::process::id()));
                     let _ = std::fs::remove_dir_all(&ds);
                     std::fs::create_dir_all(&ds).map_err(|e| e.to_string())?;
-                    extract_zip(&r.dir.join(file), &ds, &mut |name| bump(name, &mut done))?;
+                    // 只有真的要装时才下载这 18.71 MB。
+                    let data_zip =
+                        source::fetch_asset(&r.dir, &r.assets, file, &settings, &mut say)?;
+                    extract_zip(&data_zip, &ds, &mut |name| bump(name, &mut done))?;
                     copy_dir(&ds, &kit)?;
                     let _ = std::fs::remove_dir_all(&ds);
                 } else {

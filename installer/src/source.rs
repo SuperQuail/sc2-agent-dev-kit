@@ -21,6 +21,11 @@ pub struct Resolved {
     /// 存放 core/data/manifest 三个产物的目录。
     pub dir: PathBuf,
     pub manifest: Manifest,
+    /// GitHub 来源时的「资产名 -> 下载地址」；本地来源为空。
+    ///
+    /// 有了它，安装引擎才能**按需**取包体：数据包哈希一致时连下载都省掉，
+    /// 而不是先下 18.71 MB 再发现内容根本没变。
+    pub assets: Vec<(String, String)>,
 }
 
 fn curl(args: &[String]) -> Result<(), String> {
@@ -340,7 +345,6 @@ pub fn release_assets(
 fn resolve_github(
     from: &str,
     settings: &NetSettings,
-    want_artifacts: bool,
     say: &mut dyn FnMut(String),
 ) -> Result<PathBuf, String> {
     let s = from.trim();
@@ -362,17 +366,11 @@ fn resolve_github(
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| format!("建不了临时目录：{e}"))?;
 
-    // 预演只需要清单。把 20 MB 的包也拖下来只为读一个哈希，是纯粹的浪费。
-    let interesting = |n: &str| {
-        if want_artifacts {
-            wanted(n)
-        } else {
-            n.ends_with("-manifest.json")
-        }
-    };
+
+    // 这里只取清单。包体交给安装引擎按需下载 —— 数据包没变时连 18.71 MB 都不该下。
     let mut got = 0usize;
     for (name, url) in &pairs {
-        if !interesting(name) {
+        if !name.ends_with("-manifest.json") {
             continue;
         }
         say(format!("下载 {name}"));
@@ -380,9 +378,46 @@ fn resolve_github(
         got += 1;
     }
     if got == 0 {
-        return Err(format!("{repo} 的 release 里没有我们需要的资产"));
+        return Err(format!("{repo} 的 release 里没有清单资产"));
     }
     Ok(tmp)
+}
+
+/// 取 GitHub 来源的资产表，供引擎按需下载包体。失败就返回空表（引擎会退回目录里的文件）。
+pub fn github_assets(
+    from: &str,
+    settings: &NetSettings,
+    say: &mut dyn FnMut(String),
+) -> Result<Vec<(String, String)>, String> {
+    let s = from.trim();
+    let (repo, tag_opt) = match s.split_once('@') {
+        Some((r, t)) => (r, Some(t)),
+        None => (s, None),
+    };
+    let (_tag, pairs) = release_assets(repo, tag_opt, settings, say)?;
+    Ok(pairs)
+}
+
+/// 按需下载一个包体到目录里。已经存在就直接返回。
+pub fn fetch_asset(
+    dir: &Path,
+    assets: &[(String, String)],
+    name: &str,
+    settings: &NetSettings,
+    say: &mut dyn FnMut(String),
+) -> Result<PathBuf, String> {
+    let target = dir.join(name);
+    if target.is_file() {
+        return Ok(target);
+    }
+    let Some((_, url)) = assets.iter().find(|(n, _)| n == name) else {
+        return Err(format!("资产表里没有 {name}"));
+    };
+    let detected = net::detect_proxy(settings);
+    let proxy = detected.as_ref().map(|p| p.url.as_str());
+    say(format!("下载 {name}"));
+    download(url, &target, settings, proxy, say)?;
+    Ok(target)
 }
 
 /// 把来源字符串解析成一个含清单的本地目录。
@@ -401,7 +436,7 @@ pub fn resolve(
     let path = PathBuf::from(from);
     if path.is_dir() {
         let manifest = read_manifest(&path)?;
-        return Ok(Resolved { dir: path, manifest });
+        return Ok(Resolved { dir: path, manifest, assets: Vec::new() });
     }
 
     if path.is_file() && from.to_ascii_lowercase().ends_with(".zip") {
@@ -415,7 +450,11 @@ pub fn resolve(
         if sibling.is_file() {
             let text = std::fs::read_to_string(&sibling).map_err(|e| format!("读不到清单：{e}"))?;
             let manifest = serde_json::from_str(&text).map_err(|e| format!("清单格式不对：{e}"))?;
-            return Ok(Resolved { dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(), manifest });
+            return Ok(Resolved {
+                dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                manifest,
+                assets: Vec::new(),
+            });
         }
         let inner = work.join("sc2agent-release.json");
         if !inner.is_file() {
@@ -425,13 +464,16 @@ pub fn resolve(
         let mut manifest: Manifest =
             serde_json::from_str(&text).map_err(|e| format!("内嵌描述格式不对：{e}"))?;
         manifest.files.core.clear(); // 内容已经解压到 work 里
-        return Ok(Resolved { dir: work, manifest });
+        return Ok(Resolved { dir: work, manifest, assets: Vec::new() });
     }
 
     if is_github_shorthand(from) {
-        let dir = resolve_github(from, settings, want_artifacts, say)?;
+        // want_artifacts 已经不需要了：包体一律按需下载，见 install_engine。
+        let _ = want_artifacts;
+        let dir = resolve_github(from, settings, say)?;
         let manifest = read_manifest(&dir)?;
-        return Ok(Resolved { dir, manifest });
+        let assets = github_assets(from, settings, say).unwrap_or_default();
+        return Ok(Resolved { dir, manifest, assets });
     }
 
     Err(format!("认不出这个来源：{from}"))
