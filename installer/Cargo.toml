@@ -1,0 +1,22 @@
+[package]
+name = "sc2agent-installer"
+version = "0.1.0-a1"
+edition = "2024"
+
+[dependencies]
+dirs = "7.0.0"
+eframe = { version = "0.35.0", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.35.0"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+ureq = "3.4.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# 体积优先。Electron 版 70.88 MB 里 99.9% 是运行时，这里换来的每一个字节都值得省。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

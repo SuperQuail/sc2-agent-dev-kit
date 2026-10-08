@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXCLUDE_DIRS = {".git", "publish", "__pycache__", ".venv", "node_modules",
                 ".workspace-recovery", ".pytest_cache", ".mypy_cache", "sc2agent-records",
                 "build",          # PyInstaller intermediate output
+                "target",         # cargo build output; ~2 GB under installer/target
                 "sc2-catalog-graph-out"}
 # Build output is matched by prefix, not by exact name.  This kit keeps growing new
 # ones (dist, dist-exe, dist-portable, ...) and an exact-name set silently ships

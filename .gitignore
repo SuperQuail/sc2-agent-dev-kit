@@ -7,14 +7,8 @@ dist/
 # PyInstaller 构建中间产物（tools/build-updater-exe.py）
 build/
 
-# 安装器的 Node 依赖与打包产物
-# Electron 二进制约 180 MB，且由 npm install 重建，绝不入库。
-# 用通配而非逐个列举：打包目录会不断增加（dist-exe、dist-portable、…），
-# 写死名字就会漏掉下一个。本仓库已经因此两次把 180 MB 产物算进包里。
-installer/node_modules/
-installer/dist-*/
-installer/*.log
-installer/*.log.err
+# Rust 构建产物（约 2 GB，cargo build --release 重建）
+installer/target/
 
 # 本地缓存与临时文件
 __pycache__/
