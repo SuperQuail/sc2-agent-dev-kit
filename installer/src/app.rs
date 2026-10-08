@@ -47,6 +47,8 @@ pub struct App {
     /// --run：启动即开始安装，便于做带预设的快捷方式。
     autorun: bool,
     started: bool,
+    /// 是否找到了能显示中文的字体。false 时界面只剩拉丁字母。
+    font_ok: bool,
 }
 
 impl App {
@@ -57,7 +59,7 @@ impl App {
         preselect: Vec<String>,
         autorun: bool,
     ) -> Self {
-        install_fonts(&cc.egui_ctx);
+        let font_ok = install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(visuals());
         let harnesses = crate::harness::detect_all();
         Self {
@@ -82,6 +84,7 @@ impl App {
             banner: true,
             autorun,
             started: false,
+            font_ok,
         }
     }
 
@@ -150,22 +153,17 @@ impl App {
     }
 }
 
-/// 从系统加载中文字体。egui 自带字体不含 CJK，不装会满屏豆腐块。
-fn install_fonts(ctx: &egui::Context) {
-    const CANDIDATES: [(&str, u32); 6] = [
-        ("C:/Windows/Fonts/msyh.ttc", 0),
-        ("C:/Windows/Fonts/Deng.ttf", 0),
-        ("C:/Windows/Fonts/simhei.ttf", 0),
-        ("C:/Windows/Fonts/msyhbd.ttc", 0),
-        ("C:/Windows/Fonts/simsun.ttc", 0),
-        ("C:/Windows/Fonts/msyhl.ttc", 0),
-    ];
+/// 装中文字体。返回是否找到了。
+///
+/// 找不到时界面只剩拉丁字母，所以要给用户一条英文提示——中文提示自己也渲染不出来。
+fn install_fonts(ctx: &egui::Context) -> bool {
     let mut fonts = egui::FontDefinitions::default();
-    for (path, index) in CANDIDATES {
-        let Ok(bytes) = std::fs::read(path) else { continue };
-        let mut data = egui::FontData::from_owned(bytes);
-        data.index = index;
+    let picked = crate::fonts::discover();
+    if let Some(p) = &picked {
+        let mut data = egui::FontData::from_owned(p.bytes.clone());
+        data.index = p.index;
         fonts.font_data.insert("cjk".to_owned(), Arc::new(data));
+        // 放在最前面：优先用它，缺字时 egui 会继续往后找内置字体。
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -176,9 +174,9 @@ fn install_fonts(ctx: &egui::Context) {
             .entry(egui::FontFamily::Monospace)
             .or_default()
             .push("cjk".to_owned());
-        break;
     }
     ctx.set_fonts(fonts);
+    picked.is_some()
 }
 
 fn section(ui: &mut Ui, index: usize, title: &str, add: impl FnOnce(&mut Ui)) {
@@ -304,6 +302,29 @@ impl eframe::App for App {
             .frame(egui::Frame::new().fill(BG_WINDOW).inner_margin(egui::Margin::symmetric(20, 16)))
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    // 找不到中文字体时界面渲染不了中文，提示只能用英文写。
+                    if !self.font_ok {
+                        card_frame().show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.label(
+                                RichText::new("No Chinese-capable font found on this system")
+                                    .color(WARN)
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "The interface is Chinese-only and cannot be rendered. \
+                                     Install any CJK font (Microsoft YaHei, Noto Sans SC, \
+                                     Source Han Sans, ...) and restart, or point SC2AGENT_FONT \
+                                     at a font file you already have. The command line still works: \
+                                     --cli plan|install --from <source>",
+                                )
+                                .color(TEXT_DIM)
+                                .size(12.0),
+                            );
+                        });
+                        ui.add_space(10.0);
+                    }
                     section(ui, 1, "来源", |ui| {
                         ui.horizontal(|ui| {
                             ui.add_sized(

@@ -153,8 +153,50 @@ cargo build --release        # 产物 target/release/sc2agent-installer.exe
 CLI     plan 与 install 均通过，输出可重定向
 ```
 
-## 10. 已知限制
+## 10. 中文字体
+
+egui 自带字体只有拉丁字母，界面又要显示中文——所以启动时必须找一个 CJK 字体。
+
+### 找法
+
+1. `SC2AGENT_FONT`（`路径` 或 `路径#面序号`）——显式指定，最高优先级
+2. 自动搜索 `%WINDIR%\Fonts` 与 `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+3. 按文件名优先级排序：中文版 Windows 默认字体 → 常见第三方中文字体（Noto / 思源 / 更纱 / MiSans / 鸿蒙）→ 其他 CJK（繁体、日文、韩文）
+4. **逐个验证字形覆盖，命中即停**——不做无谓的全盘扫描
+
+### 两个坑
+
+**文件名不可信。** 本机 568 个字体里，用 `deng` 匹配「等线」时把 `OLDENGL.TTF`
+（一种英文花体）也匹配进来了。所以每个候选都要真的解析 cmap，确认能画出「中」；
+判定用四个简繁共用字（中文的一）+ 简体「设」或繁体「設」二选一，简繁字体都能通过。
+
+**全盘扫描太慢。** 568 个字体文件、动辄十几 MB，全读一遍要好几秒。
+所以先只在排名靠前的十余个文件里找，全部失败才退化成扫描整个目录。
+
+### 系统真的没有 CJK 字体时
+
+界面顶部会出现一条**英文**提示（中文提示自己也渲染不出来）：
+
+```
+No Chinese-capable font found on this system
+The interface is Chinese-only and cannot be rendered. Install any CJK font ...
+or point SC2AGENT_FONT at a font file you already have.
+The command line still works: --cli plan|install --from <source>
+```
+
+中文显示为方块，但界面其余部分（路径、按钮、harness 名）仍可用，
+命令行模式完全不受影响。
+
+### 排查
+
+```bash
+sc2agent-installer.exe --font-probe
+```
+
+会打印搜索了哪些目录、选中了哪个文件、是自动发现还是 `SC2AGENT_FONT` 指定的。
+
+## 11. 已知限制
 
 - **exe 未做代码签名**，Windows 首次运行会提示未知发布者
-- 界面中文字体从系统加载（`msyh.ttc` 等）；系统无 CJK 字体时中文会显示为方块
 - 只验证了 Windows；`curl.exe` 与 `AttachConsole` 都是 Windows 路径
+- 字体验证只抽查 5 个汉字。理论上存在「能画这 5 个字但缺其他字」的字体，实际几乎不可能
