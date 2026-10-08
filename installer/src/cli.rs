@@ -2,6 +2,8 @@
 
 use crate::install::{self, Msg};
 use crate::install_engine::{self, Reporter};
+use crate::net;
+use crate::selfupdate;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -74,10 +76,68 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.get(i + 1).cloned()
 }
 
+/// 网络设置：--proxy 走手动、--no-proxy 强制直连、否则自动探测；
+/// --mirror off 关掉 GitHub 镜像竞速。
+fn network_settings(args: &[String]) -> net::NetSettings {
+    let mut settings = net::NetSettings::default();
+    if args.iter().any(|a| a == "--no-proxy") {
+        settings.proxy_mode = net::ProxyMode::Off;
+    } else if let Some(p) = flag(args, "--proxy") {
+        settings.proxy_mode = net::ProxyMode::Manual;
+        settings.proxy_url = Some(p);
+    }
+    if let Some(m) = flag(args, "--mirror") {
+        settings.use_mirrors = !m.eq_ignore_ascii_case("off");
+    }
+    settings
+}
+
+/// 自更新的两个入口。返回 Some(退出码) 表示这条命令已经处理完了。
+fn self_update(args: &[String], settings: &net::NetSettings) -> Option<i32> {
+    let check_only = args.iter().any(|a| a == "--self-check");
+    let do_it = args.iter().any(|a| a == "--self-update");
+    if !check_only && !do_it {
+        return None;
+    }
+    let mut say = |s: String| println!("  · {s}");
+    println!("当前版本 {}", selfupdate::CURRENT);
+    let info = match selfupdate::check(settings, &mut say) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("检查更新失败：{e}");
+            return Some(1);
+        }
+    };
+    let Some(info) = info else {
+        println!("已是最新版本");
+        return Some(0);
+    };
+    println!("发现新版本 {}（资产 {}）", info.version, info.asset_name);
+    if check_only {
+        println!("加 --self-update 就会装它");
+        return Some(0);
+    }
+    match selfupdate::apply(&info, settings, &mut say) {
+        Ok(path) => {
+            println!("已更新到 {}：{}", info.version, path.display());
+            println!("新版本下次启动生效");
+            Some(0)
+        }
+        Err(e) => {
+            eprintln!("自更新失败：{e}");
+            Some(1)
+        }
+    }
+}
+
 pub fn run(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         usage();
         return 0;
+    }
+    let settings = network_settings(args);
+    if let Some(code) = self_update(args, &settings) {
+        return code;
     }
     let cmd = args.iter().find(|a| *a == "plan" || *a == "install").cloned();
     let Some(cmd) = cmd else {
@@ -88,7 +148,6 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("--from 是必填的");
         return 2;
     };
-    let proxy = flag(args, "--proxy");
     let root = flag(args, "--root")
         .map(PathBuf::from)
         .unwrap_or_else(install::default_install_root);
@@ -106,11 +165,12 @@ pub fn run(args: &[String]) -> i32 {
     let install_now = cmd == "install";
     let root2 = root.clone();
     let sel = selected.clone();
+    let net_settings = settings.clone();
     std::thread::spawn(move || {
         if install_now {
-            install_engine::run_install(from, root2, proxy, sel, true, rep);
+            install_engine::run_install(from, root2, net_settings, sel, true, rep);
         } else {
-            install_engine::run_plan(from, root2, proxy, rep);
+            install_engine::run_plan(from, root2, net_settings, rep);
         }
     });
 
@@ -170,12 +230,22 @@ pub fn run(args: &[String]) -> i32 {
 
 fn usage() {
     println!(
-        "StarCraftIIAgent 安装器（无界面模式）\n\n\
+        "开发套件安装器（无界面模式）\n\n\
          用法:\n\
-           sc2agent-installer.exe                    启动图形界面\n\
-           sc2agent-installer.exe --cli plan    --from <来源>\n\
-           sc2agent-installer.exe --cli install --from <来源> [--harness dsh,claude]\n\n\
-         来源可以是 GitHub release（owner/repo 或 owner/repo@tag）、本地发行目录、或本地 zip。\n\
-         可用选项：--root <安装根>  --proxy <代理地址>"
+           devkit-installer.exe                          启动图形界面\n\
+           devkit-installer.exe --cli plan    --from <来源>\n\
+           devkit-installer.exe --cli install --from <来源> [--harness dsh,claude]\n\
+           devkit-installer.exe --self-check             查有没有新版安装器\n\
+           devkit-installer.exe --self-update            下新版并就地替换自己\n\
+           devkit-installer.exe --font-probe             看它选中了哪个中文字体\n\n\
+         来源可以是 GitHub release（owner/repo 或 owner/repo@tag）、本地发行目录、或本地 zip。\n\n\
+         网络选项:\n\
+           --proxy <地址>   手动指定代理，如 http://127.0.0.1:7897\n\
+           --no-proxy       强制直连，不读环境变量与系统代理\n\
+           --mirror off     关掉 GitHub 镜像竞速\n\
+           留空则自动探测：环境变量 → Windows 系统代理 → 直连\n\n\
+         其他选项:\n\
+           --root <安装根>  默认 %LOCALAPPDATA%\\sc2agent\n\
+           环境变量 SC2AGENT_PROXY / SC2AGENT_MIRROR / SC2AGENT_NO_SELF_UPDATE / SC2AGENT_FONT"
     );
 }

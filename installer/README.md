@@ -1,7 +1,10 @@
 # 发行规范与安装器
 
-本文件约定 StarCraftIIAgent 的**发布产物形态**、**安装布局**与**版本规则**。
-打包脚本 `tools/release.py` 与安装器 `installer/` 都以本文件为准。
+本文件约定**开发套件安装器**（`installer/`）的行为，以及套件的**发布产物形态**、
+**安装布局**与**版本规则**。打包脚本 `tools/release.py` 也以本文件为准。
+
+安装器名字里不带 SC2：它装的是「套件」这个抽象，SC2 Agent Dev Kit 只是当前接入的第一个。
+套件的技能列表、目标目录、包体哈希都由发布方的 manifest 描述，接新套件不需要改安装器。
 
 ---
 
@@ -195,7 +198,73 @@ sc2agent-installer.exe --font-probe
 
 会打印搜索了哪些目录、选中了哪个文件、是自动发现还是 `SC2AGENT_FONT` 指定的。
 
-## 11. 已知限制
+## 11. 网络：镜像与代理
+
+移植自 HSCL（`D:\Code\Rust\HSCL`）的 update 模块。
+
+### 镜像竞速
+
+国内直连 `github.com` 的 release 资产经常几十 KB/s 甚至超时。所以包体下载会把一个 URL
+展开成「直连 + 若干反代镜像」的候选列表，**并发竞速，谁先完成用谁，其余立刻掐掉**：
+
+```text
+直连                              ← 海外用户直接命中
+https://gh.ddlc.top/https://…      ← 国内镜像，按实测速度排序
+https://gh-proxy.com/https://…
+https://ghfast.top/https://…
+https://cors.isteed.cc/https://…
+https://ghproxy.cc/https://…
+https://github.akams.cn/https://…
+```
+
+每个候选写自己的 `.partN`，赢家改名落盘；失败信息一并保留，
+方便告诉用户「直连超时、镜像 403」之类。实测一轮竞速 7 个地址、0.5 MB 清单走直连完成。
+
+只对 **GitHub 的 URL** 展开镜像；清单这类小文件不竞速（为 0.5 MB 开七个进程不值得）。
+用 `--mirror off` 或 `SC2AGENT_MIRROR=off` 关掉。
+
+### 代理自动探测
+
+顺序：**环境变量 → Windows 系统代理 → 直连**。
+
+环境变量认 `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` / `HTTP_PROXY` / `http_proxy`（大小写都试）；
+系统代理读注册表 `Internet Settings` 的 `ProxyEnable` / `ProxyServer`，
+并处理 `http=a:1;https=b:2` 这种分协议写法。`host:port` 会自动补成 `http://host:port`。
+
+## 12. 自更新
+
+安装器会自己检查新版并就地替换。界面启动时后台查一次（失败静默，用户没要求检查就不打扰）；
+命令行用 `--self-check` 与 `--self-update`。
+
+### 找版本时不能用 /releases/latest
+
+那个接口**按定义跳过预发布**，而本项目的版本全是 `a` 预发布。结果是它 404、
+重定向落到 `/releases` 列表页，tag 被解析成字符串 `"releases"`（亲眼见过）。
+改成读发布列表 API（`?per_page=30`），按版本号排序取最高的；API 不可用时再抓 releases 页面。
+
+### 替换手法
+
+Windows **允许重命名正在运行的 exe**，所以不需要额外的批处理脚本：
+
+```text
+1. 新版下到 <exe>.new
+2. 自己改名成 <exe>.old
+3. .new 改名到原路径
+4. 启动新进程，自己退出；下次启动时顺手删掉 .old
+```
+
+比「写个 cmd 等进程退出再替换」少一个会失败的环节。下载后会校验是 PE 文件（`MZ` 开头）——
+镜像站返回一个 HTML 错误页是最常见的失败形态，直接改名会把安装器换成一段 HTML。
+
+放在 `Program Files` 等受保护目录时会改名失败，此时会明确提示手动下载替换。
+
+### 版本比较
+
+两种后缀写法视为同一个版本：`0.1.0-a1`（Cargo.toml，semver 要求连字符）与 `0.1.0a1`（`tools/sc2_version.py`，也出现在 git tag 上）。
+数字段先比；相同则预发布后缀按字符串比（`a1 < a2 < b1`）；有后缀的比无后缀的旧。
+
+用 `SC2AGENT_NO_SELF_UPDATE=1` 关掉启动时的自动检查。
+## 13. 已知限制
 
 - **exe 未做代码签名**，Windows 首次运行会提示未知发布者
 - 只验证了 Windows；`curl.exe` 与 `AttachConsole` 都是 Windows 路径

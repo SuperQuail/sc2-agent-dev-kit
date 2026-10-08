@@ -1,9 +1,14 @@
 //! 解析安装来源：本地发行目录、本地 zip、或 GitHub release。
 //!
 //! 下载走 curl.exe 而不是 Rust HTTP 客户端：Windows 10 起自带，代理环境变量
-//! 与公司网络的处理行为都是用户已经熟悉的，也少一个依赖。
+//! 与公司网络的处理行为都是用户已经熟悉的。
+//!
+//! 包体走 crate::net 的**并发竞速**（直连 + 若干 GitHub 镜像同时开跑，
+//! 谁先完成用谁），移植自 HSCL 的 update 模块。清单这类小文件直接单发。
 
 use crate::manifest::Manifest;
+use crate::net::{self, NetSettings};
+use crate::{mirror};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -34,16 +39,48 @@ fn curl(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn download(url: &str, to: &Path, proxy: Option<&str>) -> Result<(), String> {
-    let mut a: Vec<String> = vec!["-sSL".into(), "--fail".into(), "--retry".into(), "2".into()];
-    if let Some(p) = proxy.filter(|p| !p.trim().is_empty()) {
-        a.push("--proxy".into());
-        a.push(p.trim().to_string());
+/// 下载一个发行产物。GitHub 的地址会展开成「直连 + 镜像」并发竞速。
+///
+/// 竞速只用于包体：清单只有几百 KB，为它开七个进程不值得。
+fn download(
+    url: &str,
+    to: &Path,
+    net_settings: &NetSettings,
+    proxy_url: Option<&str>,
+    say: &mut dyn FnMut(String),
+) -> Result<(), String> {
+    let race = net_settings.use_mirrors && mirror::is_github_url(url);
+    if race {
+        let urls = mirror::build_mirror_urls(url, None);
+        let outcome = net::race_download(&urls, to, proxy_url, say)?;
+        let via = if outcome.url == url {
+            "直连".to_string()
+        } else {
+            format!("镜像 {}", mirror_prefix(&outcome.url).unwrap_or_default())
+        };
+        say(format!(
+            "  {} 完成，{:.1} MB，走{}",
+            to.file_name().unwrap_or_default().to_string_lossy(),
+            outcome.bytes as f64 / 1048576.0,
+            via
+        ));
+    } else {
+        let outcome = net::download_one(url, to, proxy_url)?;
+        say(format!(
+            "  {} 完成，{:.1} MB",
+            to.file_name().unwrap_or_default().to_string_lossy(),
+            outcome.bytes as f64 / 1048576.0
+        ));
     }
-    a.push("-o".into());
-    a.push(to.display().to_string());
-    a.push(url.into());
-    curl(&a)
+    Ok(())
+}
+
+/// 从镜像后的 URL 里挑出前缀，纯粹为了日志好读。
+fn mirror_prefix(url: &str) -> Option<String> {
+    let scheme_end = url.find("://")? + 3;
+    let rest = &url[scheme_end..];
+    let host_end = rest.find('/')?;
+    Some(format!("{}", &url[..scheme_end + host_end]))
 }
 
 fn fetch(url: &str, proxy: Option<&str>) -> Result<String, String> {
@@ -106,7 +143,7 @@ fn is_github_shorthand(s: &str) -> bool {
 /// 惰性加载用的纯 HTML 片段，不受 API 限流，链接形如 /owner/repo/releases/download/tag/name。
 fn assets_from_page(repo: &str, tag: &str, proxy: Option<&str>) -> Result<Vec<(String, String)>, String> {
     let url = format!("https://github.com/{repo}/releases/expanded_assets/{tag}");
-    let html = fetch(&url, proxy)?;
+    let html = fetch_html(&url, proxy)?;
     let mut out: Vec<(String, String)> = Vec::new();
     for part in html.split("href=\"") {
         let Some(end) = part.find('"') else { continue };
@@ -126,9 +163,104 @@ fn assets_from_page(repo: &str, tag: &str, proxy: Option<&str>) -> Result<Vec<(S
     Ok(out)
 }
 
-/// 跟随重定向拿到最终 URL，用来把 latest 解析成具体 tag。
+/// 抓 HTML 页面。
+///
+/// 不能复用 fetch：它带 `Accept: application/vnd.github+json`，而 GitHub 的 HTML
+/// 页面会以 **406 Not Acceptable** 拒绝这个 Accept —— release 页面回退就是这样挂的。
+fn fetch_html(url: &str, proxy: Option<&str>) -> Result<String, String> {
+    let mut a: Vec<String> = vec![
+        "-sSL".into(),
+        "--fail".into(),
+        "--connect-timeout".into(),
+        "10".into(),
+        "--max-time".into(),
+        "30".into(),
+        "-H".into(),
+        "Accept: text/html,application/xhtml+xml".into(),
+        "-H".into(),
+        "User-Agent: devkit-installer".into(),
+    ];
+    if let Some(p) = proxy.filter(|p| !p.trim().is_empty()) {
+        a.push("--proxy".into());
+        a.push(p.trim().to_string());
+    }
+    a.push(url.into());
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(&a);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().map_err(|e| format!("无法启动 curl.exe：{e}"))?;
+    if !out.status.success() {
+        return Err(format!("请求失败：{}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// 找这个仓库最新的 tag，**包含预发布**。
+///
+/// 不能用 `/releases/latest`：它按定义跳过预发布，而本项目的版本全是 a/b 预发布，
+/// 于是那个接口返回 404，重定向落到 /releases 列表页，tag 会被解析成字符串 "releases"。
+/// 改成读发布列表，按版本号排序取最高的。
+fn latest_tag(
+    repo: &str,
+    proxy: Option<&str>,
+    say: &mut dyn FnMut(String),
+) -> Result<String, String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    let api = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
+    if let Ok(body) = fetch(&api, proxy) {
+        if let Ok(list) = serde_json::from_str::<serde_json::Value>(&body) {
+            for r in list.as_array().cloned().unwrap_or_default() {
+                if let Some(t) = r.get("tag_name").and_then(|v| v.as_str()) {
+                    candidates.push(t.to_string());
+                }
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        say("API 拿不到发布列表，改从 releases 页面解析".into());
+        let html = fetch_html(&format!("https://github.com/{repo}/releases"), proxy)?;
+        let needle = format!("/{repo}/releases/tag/");
+        for part in html.split("href=\"") {
+            let Some(end) = part.find('"') else { continue };
+            let href = &part[..end];
+            let Some(idx) = href.find(&needle) else { continue };
+            let t = &href[idx + needle.len()..];
+            let t = t.split(['"', '?', '/']).next().unwrap_or("").to_string();
+            if !t.is_empty() && !candidates.contains(&t) {
+                candidates.push(t);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Err(format!("{repo} 一个发布都没有"));
+    }
+
+    let mut best = candidates[0].clone();
+    for c in &candidates {
+        if crate::version::is_newer(c, &best) {
+            best = c.clone();
+        }
+    }
+    Ok(best)
+}
+
+/// 跟随重定向拿到最终 URL。
 fn effective_url(url: &str, proxy: Option<&str>) -> Result<String, String> {
-    let mut a: Vec<String> = vec!["-sSL".into(), "-o".into(), "NUL".into(), "-w".into(), "%{url_effective}".into()];
+    // 元数据请求必须自己设上限：没有 --max-time 时连接一卡就永久挂住。
+    let mut a: Vec<String> = vec![
+        "-sSL".into(),
+        "--connect-timeout".into(),
+        "10".into(),
+        "--max-time".into(),
+        "30".into(),
+        "-o".into(),
+        "NUL".into(),
+        "-w".into(),
+        "%{url_effective}".into(),
+    ];
     if let Some(p) = proxy.filter(|p| !p.trim().is_empty()) {
         a.push("--proxy".into());
         a.push(p.trim().to_string());
@@ -145,40 +277,32 @@ fn effective_url(url: &str, proxy: Option<&str>) -> Result<String, String> {
 fn wanted(name: &str) -> bool {
     name.ends_with("-manifest.json") || name.ends_with("-core.zip") || name.ends_with("-data.zip")
 }
-fn resolve_github(
-    from: &str,
-    proxy: Option<&str>,
-    want_artifacts: bool,
+/// 解析 GitHub release 的资产列表。返回 (tag, [(资产名, 下载地址)])。
+///
+/// 优先走 API；未认证的 API 每小时只有 60 次，触发 403 是常态，于是回退到页面解析。
+/// 安装器自更新也走这里，所以它是公共的。
+pub fn release_assets(
+    repo: &str,
+    tag: Option<&str>,
+    settings: &NetSettings,
     say: &mut dyn FnMut(String),
-) -> Result<PathBuf, String> {
-    let s = from.trim();
-    let (repo, tag_opt) = match s.split_once('@') {
-        Some((r, t)) => (r.trim_start_matches("https://github.com/"), Some(t.to_string())),
-        None => (s.trim_start_matches("https://github.com/"), None),
-    };
+) -> Result<(String, Vec<(String, String)>), String> {
+    let detected = net::detect_proxy(settings);
+    let proxy = detected.as_ref().map(|p| p.url.as_str());
     let repo = repo
+        .trim_start_matches("https://github.com/")
         .trim_end_matches('/')
         .trim_end_matches("/releases")
         .to_string();
 
-    // 先把 tag 定下来：没给就从 latest 的重定向里取。
-    let tag = match tag_opt {
-        Some(t) => t,
-        None => effective_url(&format!("https://github.com/{repo}/releases/latest"), proxy)?
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_string(),
+    let tag = match tag {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => latest_tag(&repo, proxy, say)?,
     };
     if tag.is_empty() {
         return Err("无法确定 release 版本".into());
     }
 
-    let tmp = std::env::temp_dir().join(format!("sc2agent-gh-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("建不了临时目录：{e}"))?;
-
-    // 优先走 API。未认证的 API 每小时只有 60 次，触发 403 是常态，于是回退到页面解析。
     say(format!("解析 GitHub release：{repo}@{tag}"));
     let api = format!("https://api.github.com/repos/{repo}/releases/tags/{tag}");
     let mut pairs: Vec<(String, String)> = Vec::new();
@@ -200,8 +324,8 @@ fn resolve_github(
             .collect::<Vec<_>>())
     });
     match api_result {
-        Ok(list) if list.iter().any(|(n, _)| wanted(n)) => pairs = list,
-        Ok(_) => say("API 返回的资产里没有我们要的包，改用页面解析".into()),
+        Ok(list) if !list.is_empty() => pairs = list,
+        Ok(_) => say("API 返回的资产为空，改用页面解析".into()),
         Err(e) => {
             say(format!("API 不可用：{e}"));
             say("改用 release 页面解析（未认证 API 限流为每小时 60 次）".into());
@@ -210,6 +334,33 @@ fn resolve_github(
     if pairs.is_empty() {
         pairs = assets_from_page(&repo, &tag, proxy)?;
     }
+    Ok((tag, pairs))
+}
+
+fn resolve_github(
+    from: &str,
+    settings: &NetSettings,
+    want_artifacts: bool,
+    say: &mut dyn FnMut(String),
+) -> Result<PathBuf, String> {
+    let s = from.trim();
+    let (repo, tag_opt) = match s.split_once('@') {
+        Some((r, t)) => (r, Some(t)),
+        None => (s, None),
+    };
+    let detected = net::detect_proxy(settings);
+    let proxy = detected.as_ref().map(|p| p.url.as_str());
+    if let Some(p) = &detected {
+        say(format!("使用代理 {}（{}）", p.url, p.source));
+    }
+
+    let (_tag, pairs) = release_assets(repo, tag_opt, settings, say)?;
+    if !pairs.iter().any(|(n, _)| wanted(n)) {
+        return Err(format!("{repo} 的 release 里没有 core/data/manifest 资产"));
+    }
+    let tmp = std::env::temp_dir().join(format!("sc2agent-gh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("建不了临时目录：{e}"))?;
 
     // 预演只需要清单。把 20 MB 的包也拖下来只为读一个哈希，是纯粹的浪费。
     let interesting = |n: &str| {
@@ -225,11 +376,11 @@ fn resolve_github(
             continue;
         }
         say(format!("下载 {name}"));
-        download(url, &tmp.join(name), proxy)?;
+        download(url, &tmp.join(name), settings, proxy, say)?;
         got += 1;
     }
     if got == 0 {
-        return Err(format!("{repo}@{tag} 里没有 core/data/manifest 资产"));
+        return Err(format!("{repo} 的 release 里没有我们需要的资产"));
     }
     Ok(tmp)
 }
@@ -238,7 +389,7 @@ fn resolve_github(
 /// want_artifacts 为 false 时只取清单，用于「预演」——它不写任何文件，也就用不着包体。
 pub fn resolve(
     from: &str,
-    proxy: Option<&str>,
+    settings: &NetSettings,
     want_artifacts: bool,
     say: &mut dyn FnMut(String),
 ) -> Result<Resolved, String> {
@@ -278,7 +429,7 @@ pub fn resolve(
     }
 
     if is_github_shorthand(from) {
-        let dir = resolve_github(from, proxy, want_artifacts, say)?;
+        let dir = resolve_github(from, settings, want_artifacts, say)?;
         let manifest = read_manifest(&dir)?;
         return Ok(Resolved { dir, manifest });
     }

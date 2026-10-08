@@ -1,7 +1,9 @@
 [package]
-name = "sc2agent-installer"
+name = "devkit-installer"
 version = "0.1.0-a1"
 edition = "2024"
+description = "开发套件安装器：把套件装到本机，并把技能交付给各 AI 助手"
+license = "MIT"
 
 [dependencies]
 dirs = "7.0.0"
@@ -12,8 +14,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 skrifa = "0.42"
-ureq = "3.4.2"
+winreg = "0.56.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
 # 体积优先。Electron 版 70.88 MB 里 99.9% 是运行时，这里换来的每一个字节都值得省。
 [profile.release]
 opt-level = "z"

@@ -6,6 +6,7 @@ use crate::install::{
     STATE_FILE,
 };
 use crate::manifest::Manifest;
+use crate::net::NetSettings;
 use crate::source;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -32,12 +33,12 @@ impl Reporter {
 }
 
 /// 只做差异计算，不写任何东西。
-pub fn run_plan(from: String, root: PathBuf, proxy: Option<String>, rep: Reporter) {
+pub fn run_plan(from: String, root: PathBuf, settings: NetSettings, rep: Reporter) {
     let result = (|| -> Result<PlanInfo, String> {
         rep.send(Msg::Phase("解析来源".into()));
         let mut say = |s: String| rep.send(Msg::Log(s));
         // 预演不写任何文件，所以只取清单，不把 20 MB 的包也拖下来。
-        let r = source::resolve(&from, proxy.as_deref(), false, &mut say)?;
+        let r = source::resolve(&from, &settings, false, &mut say)?;
         let kit = root.join(KIT_DIR);
         rep.send(Msg::Phase("核对文件".into()));
         let core = diff_files(&kit, &r.manifest.files.core);
@@ -75,7 +76,7 @@ pub fn run_plan(from: String, root: PathBuf, proxy: Option<String>, rep: Reporte
 pub fn run_install(
     from: String,
     root: PathBuf,
-    proxy: Option<String>,
+    settings: NetSettings,
     selected: Vec<String>,
     banner: bool,
     rep: Reporter,
@@ -83,7 +84,7 @@ pub fn run_install(
     let out = (|| -> Result<Summary, String> {
         rep.send(Msg::Phase("解析来源".into()));
         let mut say = |s: String| rep.send(Msg::Log(s));
-        let r = source::resolve(&from, proxy.as_deref(), true, &mut say)?;
+        let r = source::resolve(&from, &settings, true, &mut say)?;
         let manifest: &Manifest = &r.manifest;
         let kit = root.join(KIT_DIR);
         std::fs::create_dir_all(&kit).map_err(|e| format!("建不了套件目录：{e}"))?;

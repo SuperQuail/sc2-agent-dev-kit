@@ -49,6 +49,12 @@ pub struct App {
     started: bool,
     /// 是否找到了能显示中文的字体。false 时界面只剩拉丁字母。
     font_ok: bool,
+    /// 是否允许 GitHub 镜像竞速加速。
+    use_mirrors: bool,
+    /// 后台查到的可用更新。None 表示还没查到或已是最新。
+    update: Arc<std::sync::Mutex<Option<crate::selfupdate::ReleaseInfo>>>,
+    /// 自更新的进行状态，用来在界面上给个交代。
+    update_status: Arc<std::sync::Mutex<String>>,
 }
 
 impl App {
@@ -62,7 +68,7 @@ impl App {
         let font_ok = install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(visuals());
         let harnesses = crate::harness::detect_all();
-        Self {
+        let app = Self {
             harnesses,
             // 默认一个都不勾：让用户自己决定把技能交付到哪里。
             selected: preselect,
@@ -85,7 +91,70 @@ impl App {
             autorun,
             started: false,
             font_ok,
+            use_mirrors: !std::env::var("SC2AGENT_MIRROR")
+                .map(|v| v.eq_ignore_ascii_case("off"))
+                .unwrap_or(false),
+            update: Arc::new(std::sync::Mutex::new(None)),
+            update_status: Arc::new(std::sync::Mutex::new(String::new())),
+        };
+        app.spawn_update_check(&cc.egui_ctx);
+        app
+    }
+
+    /// 后台查一次有没有新版安装器。失败就静默——用户没要求检查，不该被打扰。
+    fn spawn_update_check(&self, ctx: &egui::Context) {
+        if std::env::var("SC2AGENT_NO_SELF_UPDATE").is_ok_and(|v| !v.is_empty() && v != "0") {
+            return;
         }
+        let slot = Arc::clone(&self.update);
+        let mut settings = crate::net::NetSettings::default();
+        settings.use_mirrors = self.use_mirrors;
+        if !self.proxy_text.trim().is_empty() {
+            settings.proxy_mode = crate::net::ProxyMode::Manual;
+            settings.proxy_url = Some(self.proxy_text.trim().to_string());
+        }
+        let c = ctx.clone();
+        std::thread::spawn(move || {
+            let mut quiet = |_s: String| {};
+            if let Ok(Some(info)) = crate::selfupdate::check(&settings, &mut quiet) {
+                if let Ok(mut slot) = slot.lock() {
+                    *slot = Some(info);
+                }
+                c.request_repaint();
+            }
+        });
+    }
+
+    /// 装更新：后台下载替换，然后重启自己。
+    fn apply_update(&self, ctx: &egui::Context) {
+        let Some(info) = self.update.lock().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        let mut settings = crate::net::NetSettings::default();
+        settings.use_mirrors = self.use_mirrors;
+        if !self.proxy_text.trim().is_empty() {
+            settings.proxy_mode = crate::net::ProxyMode::Manual;
+            settings.proxy_url = Some(self.proxy_text.trim().to_string());
+        }
+        let status = Arc::clone(&self.update_status);
+        let c = ctx.clone();
+        std::thread::spawn(move || {
+            let mut say = |s: String| {
+                if let Ok(mut st) = status.lock() {
+                    *st = s;
+                }
+                c.request_repaint();
+            };
+            match crate::selfupdate::apply(&info, &settings, &mut say) {
+                Ok(path) => {
+                    say("更新完成，正在重启…".into());
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let _ = crate::selfupdate::relaunch(&path);
+                    std::process::exit(0);
+                }
+                Err(e) => say(format!("更新失败：{e}")),
+            }
+        });
     }
 
     fn start(&mut self, ctx: &egui::Context, install_now: bool) {
@@ -105,20 +174,22 @@ impl App {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || c.request_repaint());
         let rep = Reporter::new(tx, wake);
         let from = self.source_text.trim().to_string();
-        let proxy = if self.proxy_text.trim().is_empty() {
-            None
-        } else {
-            Some(self.proxy_text.trim().to_string())
-        };
+        // 填了代理就走手动，留空则自动探测（环境变量 -> Windows 系统代理）。
+        let mut net_settings = crate::net::NetSettings::default();
+        net_settings.use_mirrors = self.use_mirrors;
+        if !self.proxy_text.trim().is_empty() {
+            net_settings.proxy_mode = crate::net::ProxyMode::Manual;
+            net_settings.proxy_url = Some(self.proxy_text.trim().to_string());
+        }
         let root = self.root.clone();
         let selected = self.selected.clone();
         let banner = self.banner;
 
         std::thread::spawn(move || {
             if install_now {
-                install_engine::run_install(from, root, proxy, selected, banner, rep);
+                install_engine::run_install(from, root, net_settings, selected, banner, rep);
             } else {
-                install_engine::run_plan(from, root, proxy, rep);
+                install_engine::run_plan(from, root, net_settings, rep);
             }
         });
     }
@@ -256,9 +327,9 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("StarCraftIIAgent 安装器").color(TEXT).strong().size(19.0));
+                        ui.label(RichText::new("开发套件安装器").color(TEXT).strong().size(19.0));
                         ui.label(
-                            RichText::new("安装套件，并把 29 个技能交付给你选择的 AI 助手")
+                            RichText::new("安装开发套件，并把技能交付给你选择的 AI 助手")
                                 .color(TEXT_DIM)
                                 .size(12.5),
                         );
@@ -325,6 +396,53 @@ impl eframe::App for App {
                         });
                         ui.add_space(10.0);
                     }
+                    // 有新版本时给一条横幅。检查失败是静默的——用户没要求检查。
+                    let pending = self.update.lock().ok().and_then(|g| g.clone());
+                    let status_text = self.update_status.lock().map(|g| g.clone()).unwrap_or_default();
+                    if let Some(info) = pending {
+                        card_frame().show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "安装器有新版本 {}（当前 {}）",
+                                            info.version,
+                                            crate::selfupdate::CURRENT
+                                        ))
+                                        .color(ACCENT)
+                                        .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(&info.asset_name)
+                                            .color(TEXT_FAINT)
+                                            .size(11.0),
+                                    );
+                                    if !status_text.is_empty() {
+                                        ui.label(
+                                            RichText::new(&status_text).color(TEXT_DIM).size(11.5),
+                                        );
+                                    }
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let btn = egui::Button::new(
+                                            RichText::new("安装更新")
+                                                .color(Color32::WHITE)
+                                                .strong(),
+                                        )
+                                        .fill(ACCENT)
+                                        .min_size(egui::vec2(96.0, 30.0));
+                                        if ui.add(btn).clicked() {
+                                            self.apply_update(&ctx);
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                        ui.add_space(10.0);
+                    }
                     section(ui, 1, "来源", |ui| {
                         ui.horizontal(|ui| {
                             ui.add_sized(
@@ -353,7 +471,21 @@ impl eframe::App for App {
                                     .hint_text("可选，如 http://127.0.0.1:7897"),
                             );
                             ui.label(
-                                RichText::new("从 GitHub 安装时国内通常需要")
+                                RichText::new("留空则自动探测（环境变量 → Windows 系统代理）")
+                                    .color(TEXT_FAINT)
+                                    .size(11.0),
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.use_mirrors, "");
+                            ui.label(
+                                RichText::new("镜像加速")
+                                    .color(if self.use_mirrors { TEXT } else { TEXT_DIM })
+                                    .size(12.0),
+                            );
+                            ui.label(
+                                RichText::new("直连 + 若干 GitHub 镜像同时开跑，谁先完成用谁")
                                     .color(TEXT_FAINT)
                                     .size(11.0),
                             );
