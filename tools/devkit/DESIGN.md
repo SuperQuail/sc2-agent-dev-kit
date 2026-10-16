@@ -224,8 +224,8 @@ error: CUnit 没有字段 SpeedBoost
 
 | 项 | 决定 |
 |---|---|
-| 源码 | `tools/sc2cat/`（Cargo crate） |
-| 产物 | `tools/bin/sc2cat.exe`（不进版本库，随 release 分发） |
+| 源码 | `tools/devkit/`（Cargo crate，见 [ARCHITECTURE.md](ARCHITECTURE.md)） |
+| 产物 | `tools/bin/{sc2cat,devkit-lsp}.exe`（不进版本库，随 release 分发） |
 | 版本 | 独立于套件版本；`--version` 同时打印 `Catalog.xsd` 与 `catalog-schema.json` 的 sha256 |
 | 发布 | `release.py` 打 core 包时带上 `tools/bin/` |
 
