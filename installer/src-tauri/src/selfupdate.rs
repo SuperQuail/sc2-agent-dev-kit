@@ -21,7 +21,7 @@ pub const REPO: &str = "SuperQuail/sc2-agent-dev-kit";
 /// 当前版本，来自 Cargo.toml。
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReleaseInfo {
     pub tag: String,
     pub version: String,
@@ -130,14 +130,6 @@ pub fn clean_leftovers() {
         return;
     };
     let _ = std::fs::remove_file(current.with_extension("exe.old"));
-}
-
-/// 启动新版本的自己。
-pub fn relaunch(path: &Path) -> Result<(), String> {
-    std::process::Command::new(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("启动新版失败：{e}"))
 }
 
 #[cfg(test)]

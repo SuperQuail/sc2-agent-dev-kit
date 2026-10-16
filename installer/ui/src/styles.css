@@ -1,0 +1,10 @@
+/* 只放全局底色与滚动条；组件外观全部来自 antd 主题令牌。 */
+html, body, #app { height: 100%; margin: 0; }
+body { background: #11111e; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2e2e49; border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 键盘可达性：antd 的默认焦点圈在深色底上偏弱。 */
+:focus-visible { outline: 2px solid #8b7cf0; outline-offset: 2px; }

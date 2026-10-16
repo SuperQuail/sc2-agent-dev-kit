@@ -9,18 +9,12 @@ pub struct Artifact {
     pub sha256: Option<String>,
     #[serde(default)]
     pub uncompressed_bytes: u64,
-    #[serde(default)]
-    pub file_count: usize,
-    #[serde(default)]
-    pub required: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkillEntry {
     pub name: String,
     pub source: String,
-    #[serde(default)]
-    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

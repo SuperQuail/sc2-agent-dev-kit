@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub const KIT_DIR: &str = "kit";
 pub const STATE_FILE: &str = "install.json";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Diff {
     pub same: usize,
     pub stale: usize,
@@ -20,7 +20,7 @@ pub struct Diff {
     pub total: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PlanInfo {
     pub version: String,
     pub layout_revision: u32,
@@ -32,7 +32,7 @@ pub struct PlanInfo {
     pub kit_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Summary {
     pub version: String,
     pub kit: PathBuf,
@@ -40,7 +40,7 @@ pub struct Summary {
     pub data_skipped: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum Msg {
     Phase(String),
     Total(usize),

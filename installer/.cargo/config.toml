@@ -1,4 +1,8 @@
-# crates.io 直连在国内很慢，用 rsproxy 稀疏索引。
+# crates.io 国内直连很慢，用 rsproxy 稀疏索引。
+#
+# 本机实测（2026-10）：index.crates.io 的稀疏索引更新会长时间不动；
+# rsproxy 的索引能拉下来，个别包下载会卡，用 tools 侧的脚本补齐即可。
+# cargo 需要挂着代理（HTTP_PROXY/HTTPS_PROXY）—— 与 npm 相反。
 [source.crates-io]
 replace-with = "rsproxy-sparse"
 
@@ -7,3 +11,8 @@ registry = "sparse+https://rsproxy.cn/index/"
 
 [net]
 git-fetch-with-cli = true
+retry = 5
+
+[http]
+low-speed-limit = 1
+timeout = 300

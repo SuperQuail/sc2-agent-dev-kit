@@ -28,22 +28,6 @@ pub struct Resolved {
     pub assets: Vec<(String, String)>,
 }
 
-fn curl(args: &[String]) -> Result<(), String> {
-    let mut cmd = Command::new("curl.exe");
-    cmd.args(args);
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let out = cmd.output().map_err(|e| format!("无法启动 curl.exe：{e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "下载失败（curl 退出码 {:?}）：{}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(())
-}
-
 /// 下载一个发行产物。GitHub 的地址会展开成「直连 + 镜像」并发竞速。
 ///
 /// 竞速只用于包体：清单只有几百 KB，为它开七个进程不值得。
@@ -250,33 +234,6 @@ fn latest_tag(
         }
     }
     Ok(best)
-}
-
-/// 跟随重定向拿到最终 URL。
-fn effective_url(url: &str, proxy: Option<&str>) -> Result<String, String> {
-    // 元数据请求必须自己设上限：没有 --max-time 时连接一卡就永久挂住。
-    let mut a: Vec<String> = vec![
-        "-sSL".into(),
-        "--connect-timeout".into(),
-        "10".into(),
-        "--max-time".into(),
-        "30".into(),
-        "-o".into(),
-        "NUL".into(),
-        "-w".into(),
-        "%{url_effective}".into(),
-    ];
-    if let Some(p) = proxy.filter(|p| !p.trim().is_empty()) {
-        a.push("--proxy".into());
-        a.push(p.trim().to_string());
-    }
-    a.push(url.into());
-    let mut cmd = Command::new("curl.exe");
-    cmd.args(&a);
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let out = cmd.output().map_err(|e| format!("无法启动 curl.exe：{e}"))?;
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn wanted(name: &str) -> bool {

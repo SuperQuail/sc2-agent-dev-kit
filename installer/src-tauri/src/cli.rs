@@ -236,8 +236,7 @@ fn usage() {
            devkit-installer.exe --cli plan    --from <来源>\n\
            devkit-installer.exe --cli install --from <来源> [--harness dsh,claude]\n\
            devkit-installer.exe --self-check             查有没有新版安装器\n\
-           devkit-installer.exe --self-update            下新版并就地替换自己\n\
-           devkit-installer.exe --font-probe             看它选中了哪个中文字体\n\n\
+           devkit-installer.exe --self-update            下新版并就地替换自己\n\n\
          来源可以是 GitHub release（owner/repo 或 owner/repo@tag）、本地发行目录、或本地 zip。\n\n\
          网络选项:\n\
            --proxy <地址>   手动指定代理，如 http://127.0.0.1:7897\n\
@@ -246,6 +245,6 @@ fn usage() {
            留空则自动探测：环境变量 → Windows 系统代理 → 直连\n\n\
          其他选项:\n\
            --root <安装根>  默认 %LOCALAPPDATA%\\sc2agent\n\
-           环境变量 SC2AGENT_PROXY / SC2AGENT_MIRROR / SC2AGENT_NO_SELF_UPDATE / SC2AGENT_FONT"
+           环境变量 SC2AGENT_PROXY / SC2AGENT_MIRROR / SC2AGENT_NO_SELF_UPDATE"
     );
 }

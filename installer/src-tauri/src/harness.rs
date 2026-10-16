@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Harness {
     pub id: &'static str,
     pub name: &'static str,

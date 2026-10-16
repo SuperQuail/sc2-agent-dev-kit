@@ -8,25 +8,54 @@
 
 ---
 
-## 0. 安装器是 Rust 写的
+## 0. 前端是 Tauri + React，后端是 Rust
 
-第一版用 Electron，产物 **70.88 MB**，而应用本体只有 **0.07 MB**——99.9% 是运行时。
-更糟的是安装逻辑跑在同步 IPC 处理器里，**界面会僵住、看不到进度**。
+安装器经历了两代：
 
-现在改用 Rust + egui：
+| | Electron | Rust + egui | **Tauri + React** |
+|---|---|---|---|
+| 单文件体积 | 70.88 MB | 5.59 MB | **3.14 MB** |
+| 界面技术 | 手写 HTML/CSS/JS | 立即模式绘制 | **React 19 + antd 6** |
+| 运行时依赖 | Chromium + Node | 无 | 系统 WebView2 |
+| 安装时界面 | 卡死，无进度 | 后台线程，逐文件进度 | 同左 |
 
-| | Electron 版 | Rust 版 |
-|---|---|---|
-| 单文件体积 | 70.88 MB | **5.53 MB** |
-| 运行时依赖 | Chromium + Node | 无 |
-| 安装时界面 | 卡死，无进度 | 后台线程，逐文件进度 |
+### 为什么从 egui 换成 Tauri
 
-关键设计：安装全程跑在 `std::thread` 里，通过 `mpsc` 把进度送回 UI，
-并调用 egui 的 `request_repaint` 唤醒重绘。**引擎不持有 egui 类型**，
-所以同一套逻辑也能给命令行用。
+egui 是立即模式绘制：每个控件的位置、间距、换行都要自己算。代价是
+一个 Grid 里写 set_width(available_width()) 完全无效、文字被挤成一列一个字；
+卡片宽度要手工 set_min_width；中文字体得当独立问题处理。
 
-界面视觉参考 Koishi 的暗色风格（深蓝紫底、圆角卡片、紫色强调色），布局是自订的线性安装向导。
+换成 WebView2 + React + antd 之后：
 
+* 控件用现成的（Input / Button / Checkbox / Card / Progress / Alert），不再手搓；
+* 布局交给 CSS flex，不再手工算坐标；
+* **中文字体问题消失** —— 浏览器自己做字体回退，不存在豆腐块；
+* 体积反而更小，因为不往二进制里塞渲染引擎。
+
+### 结构
+
+```text
+installer/
+  src-tauri/          Rust 后端
+    src/main.rs       入口：命令行开关分派，否则起 Tauri
+    src/commands.rs   Tauri 命令层（前端能调的全部入口）
+    src/install.rs install_engine.rs source.rs net.rs mirror.rs
+    src/selfupdate.rs harness.rs manifest.rs version.rs cli.rs
+  ui/                 React 前端
+    src/App.tsx       界面
+    src/api.ts        Tauri invoke / event 封装与类型
+    src/theme.ts      antd 主题令牌（Koishi 暗色：深蓝紫底、紫色强调）
+```
+
+### 安装引擎一行没改
+
+install_engine 仍然往 mpsc 里送 Msg，commands.rs 把同一条流转发成 Tauri 事件
+（install://progress）。少一层耦合，也少一处会和 CLI 行为分叉的地方。
+
+### 命令线仍然在
+
+同一个 exe：不带命令行开关启动图形界面，带 --cli / --self-check 等走无界面模式，
+两者共用同一套引擎。
 ## 1. 为什么拆成两个包
 
 套件里 `DataEditorXML/` 是约 **166 MB** 的游戏数据导出，其余全部内容只有约 **10 MB**。
@@ -125,12 +154,30 @@ sc2agent-installer.exe --cli install --from <来源> --harness dsh,claude,codex,
 
 ```bash
 cd installer
-cargo build --release        # 产物 target/release/sc2agent-installer.exe
+pnpm -C ui install
+ui/node_modules/.bin/tauri build --no-bundle    # 产物 src-tauri/target/release/devkit-installer.exe
 ```
 
-首次构建会拉约 295 个 crate。`.cargo/config.toml` 已把源换成 rsproxy 稀疏索引（国内直连 crates.io 很慢）。
-体积优化在 `Cargo.toml` 的 `[profile.release]`。
+几点注意：
 
+* **必须从 installer/ 调 tauri**，不是从 ui/：CLI 按约定在**子目录**里找 src-tauri，
+  从 ui/ 跑会报 “Couldn't recognize the current folder as a Tauri project”。
+* 加 --no-bundle 只出 exe，跳过 NSIS 打包（那一步要去 GitHub 下载 nsis-3.13.zip，国内常卡住）。
+* 生产构建必须开 custom-protocol 特性（Cargo.toml 里已声明）。不开的话 release 版会去连
+  devUrl，在没有 dev server 的机器上就是一片 ERR_CONNECTION_REFUSED。
+* 前端构建产物内嵌进 exe，所以改了 ui/ 要重新跑 tauri build（它会先自动跑 pnpm -C ../ui build）。
+
+### 网络
+
+**cargo 和 pnpm 对代理的偏好相反**，实测：
+
+| | 结论 |
+|---|---|
+| cargo | **要挂代理**（HTTP_PROXY/HTTPS_PROXY）。不挂时 rsproxy 的连接会被掐断，刷 “server closed abruptly” |
+| pnpm | **不要挂代理**。官方源直连 7 MB / 20s；挂上代理 25s 只下了 1/12 |
+
+crates 的镜像见 src-tauri 上层 .cargo/config.toml。若某个 .crate 被截断，cargo 会报
+“failed to unpack ... unexpected end of file”；按索引里的 cksum 重下那一个即可。
 ## 8. 发布流程
 
 ```bash

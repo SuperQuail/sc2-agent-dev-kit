@@ -1,0 +1,33 @@
+[package]
+name = "devkit-installer"
+version = "0.1.0-a1"
+edition = "2024"
+description = "开发套件安装器：把套件装到本机，并把技能交付给各 AI 助手"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+winreg = "0.56"
+dirs = "7"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+
+[features]
+# 生产构建必须开：开了才会把 ui/dist 内嵌进二进制。
+# 不开的话 release 版也会去连 devUrl，在没有 dev server 的机器上就是一片
+# ERR_CONNECTION_REFUSED。HSCL 踩过这个坑。
+custom-protocol = ["tauri/custom-protocol"]
+
+# 体积优先。前端是系统 WebView2，不再往二进制里塞浏览器引擎。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

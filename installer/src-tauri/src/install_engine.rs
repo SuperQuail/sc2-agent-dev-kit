@@ -123,7 +123,7 @@ pub fn run_install(
         let total_steps = core_files.max(1) + data_files + skill_steps.max(1) + 2;
         rep.send(Msg::Total(total_steps));
         let mut done = 0usize;
-        let mut bump = |label: &str, done: &mut usize| {
+        let bump = |label: &str, done: &mut usize| {
             *done += 1;
             rep.send(Msg::Step { done: *done, total: total_steps, label: label.to_string() });
         };

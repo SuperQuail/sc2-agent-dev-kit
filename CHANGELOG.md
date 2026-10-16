@@ -6,6 +6,31 @@
 
 ## [未发布]
 
+### 变更 — 前端改为 Tauri + React + antd
+
+参考 HSCL 新版本的前端实现（Tauri 2 + Vite + React），把界面从 egui 的立即模式绘制换成真控件库。
+
+| | Electron | Rust + egui | Tauri + React |
+|---|---|---|---|
+| 单文件体积 | 70.88 MB | 5.59 MB | **3.14 MB** |
+| 界面技术 | 手写 HTML/CSS/JS | 立即模式绘制 | React 19 + antd 6 |
+| 运行时依赖 | Chromium + Node | 无 | 系统 WebView2 |
+
+- 布局从「手工算坐标」改为 CSS flex，控件全部来自 antd（Input / Button / Checkbox / Card / Progress / Alert）
+- 主题用 antd 令牌覆盖出 Koishi 暗色（深蓝紫底、紫色强调），不自己写组件样式
+- **删除整块中文字体处理代码**（src/fonts.rs + skrifa 依赖 + --font-probe）：
+  WebView2 自己做字体回退，豆腐块问题不存在了
+- 安装引擎与 CLI 一行未改，commands.rs 把同一条 mpsc 流转发成 Tauri 事件
+- 仓库结构改为 Tauri 约定：installer/src-tauri/（Rust）+ installer/ui/（React）
+
+### 顺带修的
+
+- antd 的 Layout.Header 默认固定 64px 且 overflow:hidden，装不下标题+副标题会把标题裁掉；改 height:auto
+- .gitignore 与 tools/release.py 的跳过规则跟上新路径（src-tauri/target、ui/node_modules、ui/dist）
+
+---
+## [安装器重写为 Rust]
+
 ### 变更 — 安装器改名为「开发套件安装器」
 
 名字里不再带 SC2：它装的是「套件」这个抽象，SC2 Agent Dev Kit 只是当前接入的第一个。
