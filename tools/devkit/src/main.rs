@@ -42,6 +42,14 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// 把 pack 出来的单文件 MPQ 解回目录 —— 交付形态也要能被验
+    Unpack {
+        /// 单文件 .SC2Map / .SC2Mod
+        file: PathBuf,
+        /// 解到哪
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// 往地图/模组的 DocumentHeader 里追加一条依赖
     AddDep {
         root: PathBuf,
@@ -61,9 +69,11 @@ enum Cmd {
         /// 只改属于这个触发器的引用（按 TriggerStrings 的显示名或 Element Id）
         #[arg(long)]
         in_trigger: Option<String>,
-        /// galaxy 函数名（如 gt_IntroCinematic_Func）。
-        /// 地图没有 TriggerStrings 时，Id 推不出函数名，只能手工给。
-        #[arg(long)]
+        /// galaxy 函数名（如 gt_IntroCinematic_Func）。**必须与 --in-trigger 一起给**。
+        ///
+        /// MapScript.galaxy 才是游戏运行时执行的；不给它，galaxy 一个字都不改。
+        /// 地图有 TriggerStrings 时能从 --in-trigger 推出来，没有才需要手工给。
+        #[arg(long, requires = "in_trigger")]
         galaxy_fn: Option<String>,
     },
     /// 把 CASC 抽出的源形态整成分发形态：语系目录驼峰化、补齐 12 个语系、重写 ComponentList
@@ -109,7 +119,12 @@ fn main() -> Result<()> {
             let mut hits: Vec<_> = all
                 .iter()
                 .filter(|e| e.id.to_lowercase().contains(&q))
-                .filter(|e| r#type.as_ref().is_none_or(|t| &e.kind == t))
+                // 两种写法都认：Unit 与 CUnit —— 写错了会静默 0 命中，所以必须宽松
+                .filter(|e| {
+                    r#type.as_ref().is_none_or(|t| {
+                        e.kind.trim_start_matches('C') == t.trim_start_matches('C')
+                    })
+                })
                 .collect();
             hits.sort_by(|a, b| (&a.kind, &a.id).cmp(&(&b.kind, &b.id)));
             println!("扫到 {} 条 catalog 行，命中 {}", all.len(), hits.len());
@@ -201,6 +216,17 @@ fn main() -> Result<()> {
             });
             std::fs::write(&out, &bytes)?;
             println!("wrote {}: {} 字节", out.display(), bytes.len());
+        }
+        Cmd::Unpack { file, out } => {
+            let entries = mpq::read_entries(&file)?;
+            for (name, bytes) in &entries {
+                let p = out.join(name.replace('\\', "/"));
+                if let Some(parent) = p.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&p, bytes)?;
+            }
+            println!("解开 {} 个文件到 {}", entries.len(), out.display());
         }
         Cmd::AddDep { root, dep } => {
             let p = root.join("DocumentHeader");

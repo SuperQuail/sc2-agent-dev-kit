@@ -4,8 +4,8 @@
 //! `Enslavers Redux…SC2Map` 是 v3（208 字节头），**引擎两种都认**，所以写简单的那个。
 //!
 //! 只支持**不压缩**存储。地图本身已经含 PNG/JPG/TGA 这类压缩过的资源，再套一层收益很小。
-//! 校验靠外部工具（mpyq），不能自己读自己。
-use anyhow::{bail, Result};
+//! `read_entries` 能读回自己写的东西，另有 mpyq 做外部对账 —— 只有后者算独立验证。
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 const SECTOR_SIZE_SHIFT: u16 = 3; // 512 字节扇区
@@ -48,7 +48,7 @@ fn hash_string(name: &str, kind: usize, table: &[u32; 0x500]) -> u32 {
 
 /// MPQ 的两张表**是加密存储的**——这是格式要求，不是可选项。
 ///
-/// 加解密是同一套运算（对称），所以这里叫 encrypt 但算法与解密一致。
+/// 加密。与解密**不是**同一套运算：种子要用**明文**更新，加密时明文是输入。
 /// 密钥由表名经 TABLE 类型散列得到：`(hash table)` / `(block table)`。
 fn encrypt_table(data: &[u8], key: u32, table: &[u32; 0x500]) -> Vec<u8> {
     let mut seed1 = key;
@@ -68,6 +68,75 @@ fn encrypt_table(data: &[u8], key: u32, table: &[u32; 0x500]) -> Vec<u8> {
             .wrapping_add(3);
     }
     out
+}
+
+/// 解密。与 `encrypt_table` 只差一处：种子用**还原出来的明文**更新。
+fn decrypt_table(data: &[u8], key: u32, table: &[u32; 0x500]) -> Vec<u8> {
+    let mut seed1 = key;
+    let mut seed2: u32 = 0xEEEE_EEEE;
+    let mut out = data.to_vec();
+    for chunk in out.chunks_exact_mut(4) {
+        seed2 = seed2.wrapping_add(table[0x400 + (seed1 & 0xFF) as usize]);
+        let cipher = u32::from_le_bytes(chunk.try_into().unwrap());
+        let plain = cipher ^ seed1.wrapping_add(seed2);
+        chunk.copy_from_slice(&plain.to_le_bytes());
+        seed1 = (!seed1).wrapping_shl(0x15).wrapping_add(0x1111_1111) | (seed1 >> 0x0B);
+        seed2 = plain.wrapping_add(seed2).wrapping_add(seed2 << 5).wrapping_add(3);
+    }
+    out
+}
+
+/// 读回一个单文件 MPQ（`pack` 的产物）里的全部文件。
+///
+/// 只支持本工具写出的形态：v1 头、有 `(listfile)`、条目 STORED 且未加密。
+/// 没有它，打包成品就只能靠「打包前验目录 + 体积对账」，属于间接证据。
+pub fn read_entries(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let buf = std::fs::read(path).with_context(|| format!("读不了 {}", path.display()))?;
+    if buf.len() < 32 || &buf[0..4] != b"MPQ\x1a" {
+        bail!("不是 MPQ 文件（magic 不对）");
+    }
+    let u32at = |o: usize| u32::from_le_bytes(buf[o..o + 4].try_into().unwrap());
+    let (hash_off, block_off) = (u32at(16) as usize, u32at(20) as usize);
+    let (hn, bn) = (u32at(24) as usize, u32at(28) as usize);
+    let table = crypt_table();
+    if hash_off + hn * 16 > buf.len() || block_off + bn * 16 > buf.len() {
+        bail!("表越界，文件可能损坏");
+    }
+    let hash = decrypt_table(&buf[hash_off..hash_off + hn * 16], hash_string("(hash table)", 3, &table), &table);
+    let blocks = decrypt_table(&buf[block_off..block_off + bn * 16], hash_string("(block table)", 3, &table), &table);
+
+    let find = |name: &str| -> Option<(usize, usize)> {
+        let (a, b) = (hash_string(name, 1, &table), hash_string(name, 2, &table));
+        let mut slot = (hash_string(name, 0, &table) as usize) % hn;
+        for _ in 0..hn {
+            let e = &hash[slot * 16..slot * 16 + 16];
+            let idx = u32::from_le_bytes(e[12..16].try_into().unwrap());
+            if idx == 0xFFFF_FFFF {
+                return None;
+            }
+            if u32::from_le_bytes(e[0..4].try_into().unwrap()) == a
+                && u32::from_le_bytes(e[4..8].try_into().unwrap()) == b
+            {
+                let b = &blocks[idx as usize * 16..idx as usize * 16 + 16];
+                let off = u32::from_le_bytes(b[0..4].try_into().unwrap()) as usize;
+                let size = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+                return (off + size <= buf.len()).then_some((off, size));
+            }
+            slot = (slot + 1) % hn;
+        }
+        None
+    };
+
+    let (o, s) = find("(listfile)").context("没有 (listfile)，列不出内容")?;
+    let list = String::from_utf8_lossy(&buf[o..o + s]).to_string();
+    let mut out = Vec::new();
+    for name in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match find(name) {
+            Some((o, s)) => out.push((name.to_string(), buf[o..o + s].to_vec())),
+            None => bail!("(listfile) 里列了 {name}，哈希表里找不到"),
+        }
+    }
+    Ok(out)
 }
 
 /// 收集目录下所有文件，键用**反斜杠**相对路径（MPQ 的写法）。
@@ -183,6 +252,42 @@ pub fn pack_dir(root: &Path) -> Result<Vec<u8>> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 打出来能读回去() {
+        // 走 pack_dir 的真实路径：它会补上 (listfile)，否则读不回来。
+        let dir = std::env::temp_dir().join("devkit-roundtrip-dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("zhCN.SC2Data/LocalizedData")).unwrap();
+        std::fs::write(dir.join("mapscript.galaxy"), b"void x () {}").unwrap();
+        std::fs::write(
+            dir.join("zhCN.SC2Data/LocalizedData/GameStrings.txt"),
+            "Key=中文\n".as_bytes(),
+        )
+        .unwrap();
+
+        let archive = pack_dir(&dir).unwrap();
+        let p = std::env::temp_dir().join("devkit-roundtrip.SC2Map");
+        std::fs::write(&p, &archive).unwrap();
+        let back = read_entries(&p).unwrap();
+
+        // (listfile) 只用来枚举，不进结果 —— 否则 unpack -> pack 会多出一份
+        assert_eq!(back.len(), 2, "只有两个真实文件");
+        let galaxy = back.iter().find(|(n, _)| n == "mapscript.galaxy").unwrap();
+        assert_eq!(galaxy.1, b"void x () {}");
+        let gs = back
+            .iter()
+            .find(|(n, _)| n.ends_with("GameStrings.txt"))
+            .expect("本地化文件要能读回来");
+        assert_eq!(gs.1, "Key=中文\n".as_bytes(), "非 ASCII 内容不能坏");
+    }
+
+    #[test]
+    fn 非_mpq_文件会被拒() {
+        let p = std::env::temp_dir().join("devkit-notmpq.bin");
+        std::fs::write(&p, b"not an mpq at all").unwrap();
+        assert!(read_entries(&p).is_err());
+    }
 
     #[test]
     fn 生成的归档有正确的_v1_头() {
