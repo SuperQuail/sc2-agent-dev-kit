@@ -107,6 +107,13 @@ enum Cmd {
     },
     /// 把 CASC 抽出的源形态整成分发形态：语系目录驼峰化、补齐 12 个语系、重写 ComponentList
     Normalize { root: PathBuf },
+    /// 按前缀裁掉本地化键（所有语系）。第三方 mod 常把基础战役的文本整包抄进来，会压住战役自己的中文
+    PruneLocale {
+        root: PathBuf,
+        /// 要裁的前缀，可给多个，如 Conversation/ 、ConversationState/ 、Param/
+        #[arg(long = "drop-prefix", required = true)]
+        drop_prefix: Vec<String>,
+    },
     /// 就地设置本地化字符串（命中已有键就替换；替换不了才追加）
     Localize {
         root: PathBuf,
@@ -425,6 +432,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Normalize { root } => println!("{}", locale::normalize(&root)?),
+        Cmd::PruneLocale { root, drop_prefix } => println!("{}", locale::prune(&root, &drop_prefix)?),
         Cmd::Localize { root, locale: loc, set } => {
             let mut pairs = Vec::new();
             for s in &set {

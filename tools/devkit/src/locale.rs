@@ -124,6 +124,63 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) -> R
     Ok(())
 }
 
+/// 按前缀裁掉某些本地化键，覆盖所有语系目录。
+///
+/// 为什么要这个：第三方 mod 常常是「在某个战役基础上做的」，作者导出时会把**整个基础战役的
+/// 文本**一起抄进自己包里。那份文本是**英文**，而且覆盖的是战役自己的键 —— 打进包后，
+/// 玩家会看到「战役原文变英文」，而地图/战役自己的中文被压住。
+///
+/// 裁掉 `Conversation/` / `ConversationState/` / `Param/` 这类**战役专属前缀**即可：
+/// mod 自己的 `Button/` / `Effect/` / `Unit/` / `UserData/` 都留着。
+pub fn prune(root: &Path, drop_prefixes: &[String]) -> Result<String> {
+    let mut dropped = 0usize;
+    let mut files = 0usize;
+    let mut touched = Vec::new();
+    for e in std::fs::read_dir(root)? {
+        let p = e?.path();
+        if !p.is_dir() || !p.to_string_lossy().to_ascii_lowercase().contains(".sc2data") {
+            continue;
+        }
+        for f in std::fs::read_dir(&p)?.flatten().map(|e| e.path()) {
+            if !f.is_dir() {
+                continue;
+            }
+            for txt in std::fs::read_dir(&f)?.flatten().map(|e| e.path()) {
+                if !txt.is_file() {
+                    continue;
+                }
+                let raw = std::fs::read(&txt)?;
+                let bom = raw.starts_with(BOM);
+                let body = String::from_utf8_lossy(raw.strip_prefix(BOM).unwrap_or(&raw)).to_string();
+                let mut kept = Vec::new();
+                let mut n = 0usize;
+                for line in body.lines() {
+                    let k = line.split('=').next().unwrap_or("");
+                    // 只裁「有 = 的键行」；注释/空行保留
+                    if line.contains('=') && drop_prefixes.iter().any(|p| k.starts_with(p.as_str())) {
+                        n += 1;
+                    } else {
+                        kept.push(line);
+                    }
+                }
+                if n > 0 {
+                    let mut out = Vec::new();
+                    if bom {
+                        out.extend_from_slice(BOM);
+                    }
+                    out.extend_from_slice(kept.join("\n").as_bytes());
+                    out.push(b'\n');
+                    std::fs::write(&txt, out)?;
+                    dropped += n;
+                    files += 1;
+                    touched.push(format!("{}/{}: -{}", p.file_name().unwrap().to_string_lossy(), txt.file_name().unwrap().to_string_lossy(), n));
+                }
+            }
+        }
+    }
+    Ok(format!("裁掉 {} 个键（{} 个文件）：{}", dropped, files, touched.join(", ")))
+}
+
 /// 就地设置若干本地化键：命中已有键就**替换**（不是追加 —— 追加时先出现的旧值会赢），
 /// 没有就追加。写回时保留原文件的 BOM。
 pub fn set_keys(root: &Path, locale: &str, pairs: &[(String, String)]) -> Result<String> {

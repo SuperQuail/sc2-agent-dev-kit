@@ -523,6 +523,47 @@ Blizzard 的文件带 `\xef\xbb\xbf`，手写的不带就**读不到**。
 > 教训：**先查依赖里有没有，再决定要不要自己造。**
 > 一个「看起来解决了问题」的重复定义，代价可能是悄悄毁掉别人的数据。
 
+## L. 依赖 mod 会把战役原文「抄」进来（2026-10-17，收尾）
+
+### L1. 现象：包能加载，但**部分战役原文变成英文**
+
+截图样本：目标栏 `Hero Units` / `Marines`、字幕 `Keep your intervals wide…`。
+而同一屏的 `教程`、CHEAT 提示是中文 —— 说明中文数据在，只是**被盖住了**。
+
+### L2. 根因：第三方 mod 是「在战役基础上做的」，导出时把战役文本整包抄进了自己
+
+那个泽拉图 mod 的 `enUS/GameStrings.txt`（25,885 行、**0 个中文字**）里：
+
+| 前缀 | 条数 | 是什么 |
+|---|---|---|
+| `Conversation/` | 7,924 | 战役对话：`TRaynor01` `TZeratul01` `TValerian02A` … |
+| `ConversationState/` | 2,139 | `StoryTips` / `MissionObjective` / `CinematicSubtitles` … |
+| `Param/` | 1,045 | **战役地图的字符串键** |
+
+`TRaynor01` 就是自由日。这些键覆盖了战役自己的中文 → 玩家看到英文。
+
+**而 `ObjectStrings.txt` 反而不覆盖原版**（实测 `Unit/Name/Marine` 等都不在里面）——
+所以**不能整个删掉 locale 文件**，只能**按前缀裁**。
+
+### L3. 我在这上面犯过两次错
+
+1. 把 mod 的 `enUS` 目录**原样复制**成 `zhCN` —— 等于把那份英文抄进了中文语系
+2. 更早：为了让单位名显示，补了一堆语系文件，从没检查过里面装的是什么
+
+**教训：补语系文件前，先看清楚那份内容属于谁。**
+第三方 mod 的本地化文件不一定只描述它自己。
+
+### L4. 修法：按前缀裁（已做成命令）
+
+`sc2cat prune-locale <mod> --drop-prefix Conversation/ --drop-prefix ConversationState/ --drop-prefix Param/`
+
+裁掉 36,216 个键（6 个文件），保留 mod 自己的 `Button/` / `Effect/` / `Unit/` / `UserData/`。
+
+效果：两段英文样本消失 ✓，`ObjectStrings` 仍有 29,826 行（单位名都留着）✓，`doctor` 全绿 ✓。
+
+> **边界**：哪些前缀算「战役专属」要判断，不能自动推。
+> 这三个是这次的答案，换一个 mod 要重看。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |
