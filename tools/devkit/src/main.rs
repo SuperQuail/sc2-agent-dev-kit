@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, doctor, edit, galaxy, locale, map, mpq, triggers};
+use devkit::{catalog, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -35,6 +35,13 @@ enum Cmd {
         from: String,
         #[arg(long)]
         to: String,
+    },
+    /// 依赖漂移报告：我们这份拷贝相对**原始依赖**改了哪些文件。交付前必跑
+    DiffDep {
+        /// 原始依赖目录
+        original: PathBuf,
+        /// 我们交付的拷贝
+        ours: PathBuf,
     },
     /// 交付物自检：这一条命令回答「这个包是不是半成品」
     Doctor { pkg: PathBuf },
@@ -207,6 +214,26 @@ fn main() -> Result<()> {
         Cmd::SetPlacedUnit { map: mp, from, to } => {
             let (n, p) = map::replace_placed_unit(&mp, &from, &to)?;
             println!("wrote {}: {} 处 UnitType=\"{from}\" -> \"{to}\"", p.display(), n);
+        }
+        Cmd::DiffDep { original, ours } => {
+            let d = drift::compare(&original, &ours)?;
+            println!("丢了 {} 个 / 加了 {} 个 / 改了 {} 个", d.lost.len(), d.added.len(), d.changed.len());
+            for x in &d.lost {
+                println!("  FAIL 丢了 {x}");
+            }
+            for x in &d.added {
+                println!("  +    加了 {x}");
+            }
+            for (k, a, b) in &d.changed {
+                println!("  ~    改了 {k}  ({a} -> {b} 字节)");
+            }
+            if d.clean() {
+                println!("两份完全一致");
+            } else if d.lost.is_empty() {
+                println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
+            } else {
+                anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
         }
         Cmd::Doctor { pkg } => {
             // 交付物是 zip，自检也得能吃 zip —— 解到临时目录再查。
