@@ -1,8 +1,45 @@
 //! 读 `.SC2Mod` / `.SC2Map` 目录：里面有什么、关键文件在哪。
 //!
 //! 不解析内容——那是 `catalog` / `triggers` / `galaxy` 的事。
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+
+/// 往 `DocumentHeader` 里追加一条依赖。
+///
+/// 实测格式（偏移 44 起）：
+///
+/// ```text
+/// 04 00 00 00                         u32 依赖条数
+/// "file:Mods\kit_liberty_story.SC2Mod\0"   NUL 结尾的 UTF-8
+/// "file:Mods\3疯批帝国之翼.SC2Mod\0"
+/// ```
+///
+/// 所以加一条 = 计数 +1、在最后一条之后插入。
+/// 用「第一个 `file:` 的位置」来定位计数，不硬编码偏移。
+pub fn add_dependency(header: &[u8], dep: &str) -> Result<Vec<u8>> {
+    let first = header
+        .windows(5)
+        .position(|w| w == b"file:")
+        .context("DocumentHeader 里找不到 file: 依赖区")?;
+    let count_at = first.checked_sub(4).context("依赖计数位置异常")?;
+    let count = u32::from_le_bytes(header[count_at..first].try_into().unwrap()) as usize;
+
+    // 依次跨过 count 条 NUL 结尾串，得到插入点。
+    let mut at = first;
+    for _ in 0..count {
+        let end = header[at..].iter().position(|&c| c == 0).context("依赖串未以 NUL 结尾")? + at;
+        at = end + 1;
+    }
+
+    let mut out = Vec::with_capacity(header.len() + dep.len() + 1);
+    out.extend_from_slice(&header[..count_at]);
+    out.extend_from_slice(&((count + 1) as u32).to_le_bytes());
+    out.extend_from_slice(&header[first..at]);
+    out.extend_from_slice(dep.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&header[at..]);
+    Ok(out)
+}
 
 /// 一个模块目录（.SC2Mod 或 .SC2Map）里值得关心的东西。
 #[derive(Debug, Clone)]

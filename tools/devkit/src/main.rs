@@ -34,6 +34,12 @@ enum Cmd {
     Spawns { map: PathBuf },
     /// 在 Triggers 里找某个单位的引用（只列，不改）
     FindUnit { map: PathBuf, unit: String },
+    /// 往地图/模组的 DocumentHeader 里追加一条依赖
+    AddDep {
+        root: PathBuf,
+        /// 依赖串，如 file:Mods\kit_lotv_zeratul.SC2Mod
+        dep: String,
+    },
     /// 精确替换 Triggers 里的单位引用（只改 Value 文本）
     SetUnit {
         map: PathBuf,
@@ -44,7 +50,28 @@ enum Cmd {
         /// 只显示将要改什么，不落盘
         #[arg(long)]
         dry_run: bool,
+        /// 只改属于这个触发器的引用（按 TriggerStrings 的显示名或 Element Id）
+        #[arg(long)]
+        in_trigger: Option<String>,
     },
+}
+
+/// 从地图里找 TriggerStrings（enUS 优先），解析出触发器显示名。
+fn load_trigger_names(map: &std::path::Path) -> std::collections::HashMap<String, String> {
+    for loc in ["enUS", "zhCN", "zhTW"] {
+        // 目录名是 `enUS.SC2Data`（一个目录），不是 `enUS/SC2Data`。
+        let p = map
+            .join(format!("{loc}.SC2Data"))
+            .join("LocalizedData")
+            .join("TriggerStrings.txt");
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            let m = triggers::trigger_names(&s);
+            if !m.is_empty() {
+                return m;
+            }
+        }
+    }
+    Default::default()
 }
 
 fn rel(p: &std::path::Path, root: &std::path::Path) -> String {
@@ -113,23 +140,65 @@ fn main() -> Result<()> {
             let l = map::layout(&mp)?;
             let t = l.triggers.context("这个目录里没有 Triggers")?;
             let xml = std::fs::read_to_string(&t)?;
-            let all = triggers::unit_values(&xml)?;
+            let names = load_trigger_names(&mp);
+            let all = triggers::unit_values_named(&xml, &names)?;
             let hits: Vec<_> = all.iter().filter(|v| v.value == unit).collect();
             println!("共 {} 处 Unit 引用，其中 {} 有 {} 处", all.len(), unit, hits.len());
-            for v in hits.iter().take(40) {
-                println!("  :{:<6} 字节 {}..{}", v.line, v.start, v.end);
+            for v in hits.iter().take(60) {
+                println!(
+                    "  :{:<6} {:<28} {}",
+                    v.line,
+                    v.trigger_name.as_deref().unwrap_or(v.trigger_id.as_deref().unwrap_or("?")),
+                    format!("{}..{}", v.start, v.end)
+                );
+            }
+            // 按触发器汇总，便于判断该改哪一组
+            let mut by: Vec<(String, usize)> = Vec::new();
+            for v in &hits {
+                let k = v
+                    .trigger_name
+                    .clone()
+                    .or_else(|| v.trigger_id.clone())
+                    .unwrap_or_else(|| "(无归属)".into());
+                match by.iter_mut().find(|(n, _)| n == &k) {
+                    Some((_, c)) => *c += 1,
+                    None => by.push((k, 1)),
+                }
+            }
+            println!("  按触发器汇总：");
+            for (n, c) in &by {
+                println!("    {:<32} {}", n, c);
             }
         }
-        Cmd::SetUnit { map: mp, from, to, dry_run } => {
+        Cmd::AddDep { root, dep } => {
+            let p = root.join("DocumentHeader");
+            let before = std::fs::read(&p).with_context(|| format!("读不了 {}", p.display()))?;
+            let after = map::add_dependency(&before, &dep)?;
+            println!("依赖表 {} -> {} 字节", before.len(), after.len());
+            std::fs::write(&p, after)?;
+            println!("wrote {}: +{}", p.display(), dep);
+        }
+        Cmd::SetUnit { map: mp, from, to, dry_run, in_trigger } => {
             let l = map::layout(&mp)?;
             let t = l.triggers.context("这个目录里没有 Triggers")?;
             let xml = std::fs::read_to_string(&t)?;
-            let hits: Vec<_> = triggers::unit_values(&xml)?
+            let names = load_trigger_names(&mp);
+            let hits: Vec<_> = triggers::unit_values_named(&xml, &names)?
                 .into_iter()
                 .filter(|v| v.value == from)
+                .filter(|v| match &in_trigger {
+                    None => true,
+                    Some(w) => {
+                        v.trigger_name.as_deref() == Some(w.as_str())
+                            || v.trigger_id.as_deref() == Some(w.as_str())
+                    }
+                })
                 .collect();
             if hits.is_empty() {
-                anyhow::bail!("Triggers 里没有 <Value>{from}</Value>，文件未改动");
+                match &in_trigger {
+                    Some(w) => anyhow::bail!("触发器「{w}」里没有 <Value>{from}</Value>，文件未改动"),
+                    None => anyhow::bail!("Triggers 里没有 <Value>{from}</Value>，文件未改动"),
+                }
             }
             let edits: Vec<(usize, usize, String)> =
                 hits.iter().map(|v| (v.start, v.end, to.clone())).collect();
