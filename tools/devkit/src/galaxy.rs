@@ -1,7 +1,7 @@
-//! 从生成的 `MapScript.galaxy` 里找出单位生成点。
+//! 从生成的 `MapScript.galaxy` 里找出单位生成点，以及替换创建调用。
 //!
-//! **只读**。这个文件是编辑器从 `Triggers` 生成的，改它会被覆盖——
-//! 规则见 skills/sc2-map-triggers。它可读性远好于编译后的触发器图，所以用它来*找*。
+//! **开发时**别手改它（编辑器保存会重新生成）；但**产出交付物**时**必须**改它：
+//! 游戏运行时执行的只有它，`Triggers` 是编辑器的源。只改源 = 进游戏毫无变化。
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -18,6 +18,46 @@ pub struct Spawn {
     pub line: usize,
     /// 该行原文（已 trim）
     pub text: String,
+}
+
+/// 把**创建调用**里的单位字面量 `"from"` 换成 `"to"`，返回新文本与改动处数。
+///
+/// 只动创建类调用（`CreateUnits*` / `UnitCreate(` / `UnitCargoCreate`），
+/// 不碰 `UnitGroup("Marine", ...)` 这种筛选/统计用法 —— 那些改了会出别的错。
+///
+/// `scope_fn` 给了就只改该函数体内：触发器显示名去掉空格就是函数名
+/// （`Intro Cinematic` -> `gt_IntroCinematic_Func`）。
+pub fn replace_created_unit(src: &str, from: &str, to: &str, scope_fn: Option<&str>) -> (String, usize) {
+    let old = format!("\"{from}\"");
+    let new = format!("\"{to}\"");
+    let sig = scope_fn.map(|f| format!("bool {f} ("));
+    let mut out = String::with_capacity(src.len());
+    let (mut n, mut inside, mut depth) = (0usize, scope_fn.is_none(), 0i32);
+
+    for line in src.split_inclusive('\n') {
+        if let Some(sig) = &sig {
+            if line.contains(sig.as_str()) {
+                inside = true;
+                depth = 0;
+            }
+        }
+        let creates = line.contains("CreateUnits")
+            || line.contains("UnitCreate(")
+            || line.contains("UnitCargoCreate");
+        if inside && creates && line.contains(&old) {
+            out.push_str(&line.replace(&old, &new));
+            n += 1;
+        } else {
+            out.push_str(line);
+        }
+        if sig.is_some() && inside {
+            depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+            if depth <= 0 && line.contains('}') {
+                inside = false;
+            }
+        }
+    }
+    (out, n)
 }
 
 /// 扫一个 .galaxy 文件里的 UnitCreate 调用。
@@ -270,4 +310,37 @@ mod tests {
     fn 文件不存在返回错误() {
         assert!(spawns(std::path::Path::new("这个文件不存在.galaxy")).is_err());
     }
+
+    #[test]
+    fn 只替换创建调用不动筛选用法() {
+        let src = r#"void x () {
+    libNtve_gf_CreateUnitsAtPoint2(1, "Marine", 0, gv_P, PointFromId(1));
+    if ((UnitGroupCount(UnitGroup("Marine", gv_P, RegionEntireMap(), UnitFilter(0,0,0,0), 0), c_unitCountAll) > 0)) {
+    }
+    UnitCargoCreate(gv_ship, "Marine", 5);
 }
+"#;
+        let (out, n) = replace_created_unit(src, "Marine", "ZeratulZealot", None);
+        assert_eq!(n, 2, "创建调用两处");
+        assert!(out.contains(r#"CreateUnitsAtPoint2(1, "ZeratulZealot""#));
+        assert!(out.contains(r#"UnitCargoCreate(gv_ship, "ZeratulZealot", 5)"#));
+        assert!(out.contains(r#"UnitGroup("Marine""#), "筛选用法必须原样保留");
+    }
+
+    #[test]
+    fn 限定触发器时只改函数体内() {
+        let src = r#"bool gt_IntroCinematic_Func (bool a, bool b) {
+    libNtve_gf_CreateUnitsAtPoint2(1, "Marine", 0, gv_P, PointFromId(1));
+}
+
+bool gt_Other_Func (bool a, bool b) {
+    libNtve_gf_CreateUnitsAtPoint2(1, "Marine", 0, gv_P, PointFromId(2));
+}
+"#;
+        let (out, n) = replace_created_unit(src, "Marine", "ZeratulZealot", Some("gt_IntroCinematic_Func"));
+        assert_eq!(n, 1);
+        assert_eq!(out.matches(r#""ZeratulZealot""#).count(), 1);
+        assert_eq!(out.matches(r#""Marine""#).count(), 1, "另一个函数不动");
+    }
+}
+

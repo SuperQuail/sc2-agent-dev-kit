@@ -2,6 +2,7 @@
 pub mod catalog;
 pub mod edit;
 pub mod galaxy;
+pub mod locale;
 pub mod map;
 pub mod mpq;
 pub mod triggers;

@@ -359,6 +359,46 @@ bnet:Liberty (Mod)/0.0/999,file:Mods/Liberty.SC2Mod  带 bnet 前缀
 - 包布局 `Maps/Campaign/traynor01.SC2Map` + `Mods/<mod>/`，**文件名必须与战役任务名一致**（否则不覆盖）
 - `mods=` 只是标记必需，**不负责挂载**；依赖要么打进包，要么确认用户已装
 
+## H. 本地化与组件结构（2026-10-17 追记，收尾阶段）
+
+> 这一组全是「看起来改对了、进游戏全是裸键」的坑。
+
+### H1. CASC 抽出来的是**源形态**，不是分发形态
+
+| | CASC 源形态 | 能跑的成品图 |
+|---|---|---|
+| 语系目录名 | `zhcn.sc2data` 全小写 | `zhCN.SC2Data` **驼峰** |
+| 语系数量 | 只带当前语系 | **12 个全带** |
+| `ComponentList` | 声明 12 个（文件可能缺） | 声明 12 个、文件也齐 |
+
+按源形态打出来的图，**文本组件不生效，画面上所有文字变成裸键**（`Param/Value/803351AA` 这种）。
+修法：`sc2cat normalize` —— 驼峰化 + 补齐 12 语系 + 重写 `ComponentList`。
+
+**症状特征**：游戏自身的 UI 字符串（`等级: 信徒`、`轻甲 - 生物单位`）是中文，只有地图/mod 的文本是裸键。
+
+### H2. 本地化文件要带 UTF-8 BOM
+
+Blizzard 的文件带 `\xef\xbb\xbf`，手写的不带就**读不到**。
+`sc2cat localize` 现在会保留原 BOM。
+
+### H3. 一个语系目录里要放**整套**文件，不是只有要改的那个
+
+原版 mod 的 `enUS.SC2Data/LocalizedData/` 有 5 个文件
+（`ConversationStrings` / `GameHotkeys` / `GameStrings` / `ObjectStrings` / `TriggerStrings`），
+功能正常的第三方 mod 每份都有 4 个。
+只放一个 `ObjectStrings.txt` 的语系**不生效**。
+
+### H4. 设置字符串是**替换**，不是追加
+
+往文件末尾追加 `Unit/Name/X=中文`，而文件前面已经有 `Unit/Name/X=Xel'Naga Warrior` 时，
+**先出现的赢** —— 追加等于没改。必须就地替换。
+
+### H5. `.version` 清单与实际文件集必须一致
+
+`GameText.version` 这类文件记录「这个组件有哪些文件」。
+改了文件集（比如从 1 个语系变 12 个）而清单没跟着变，**组件会被判无效**。
+生成不出正确清单时，删掉它比留一份错的强（游戏能容忍缺清单）。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |

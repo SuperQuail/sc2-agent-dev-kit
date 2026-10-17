@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, edit, galaxy, map, mpq, triggers};
+use devkit::{catalog, edit, galaxy, locale, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -61,6 +61,21 @@ enum Cmd {
         /// 只改属于这个触发器的引用（按 TriggerStrings 的显示名或 Element Id）
         #[arg(long)]
         in_trigger: Option<String>,
+        /// galaxy 函数名（如 gt_IntroCinematic_Func）。
+        /// 地图没有 TriggerStrings 时，Id 推不出函数名，只能手工给。
+        #[arg(long)]
+        galaxy_fn: Option<String>,
+    },
+    /// 把 CASC 抽出的源形态整成分发形态：语系目录驼峰化、补齐 12 个语系、重写 ComponentList
+    Normalize { root: PathBuf },
+    /// 就地设置本地化字符串（命中已有键就替换；替换不了才追加）
+    Localize {
+        root: PathBuf,
+        #[arg(long, default_value = "zhCN")]
+        locale: String,
+        /// 形如 Unit/Name/Zealot=狂热者，可给多个
+        #[arg(long = "set", required = true)]
+        set: Vec<String>,
     },
 }
 
@@ -195,7 +210,7 @@ fn main() -> Result<()> {
             std::fs::write(&p, after)?;
             println!("wrote {}: +{}", p.display(), dep);
         }
-        Cmd::SetUnit { map: mp, from, to, dry_run, in_trigger } => {
+        Cmd::SetUnit { map: mp, from, to, dry_run, in_trigger, galaxy_fn } => {
             let l = map::layout(&mp)?;
             let t = l.triggers.context("这个目录里没有 Triggers")?;
             let xml = std::fs::read_to_string(&t)?;
@@ -228,7 +243,47 @@ fn main() -> Result<()> {
             } else {
                 std::fs::write(&t, out)?;
                 println!("wrote {}: {} 处 {from} -> {to}", t.display(), hits.len());
+
+                // 运行时执行的是 MapScript.galaxy，光改 Triggers 不生效。
+                if let Some(gal) = ["MapScript.galaxy", "mapscript.galaxy"]
+                    .iter()
+                    .map(|n| mp.join(n))
+                    .find(|p| p.is_file())
+                {
+                    let src = std::fs::read_to_string(&gal)?;
+                    // 触发器显示名去空格就是函数名： Intro Cinematic -> gt_IntroCinematic_Func
+                    let fname = galaxy_fn.clone().or_else(|| {
+                        in_trigger
+                            .as_ref()
+                            .map(|w| names.get(w).cloned().unwrap_or_else(|| w.clone()))
+                            .map(|n| format!("gt_{}_Func", n.replace(' ', "")))
+                    });
+                    if fname.is_none() {
+                        anyhow::bail!(
+                            "给了 --in-trigger 但推不出 galaxy 函数名（这张图没有 TriggerStrings）——\n\
+                             请补 --galaxy-fn gt_Xxx_Func，否则改了源不改产物，进游戏不会有变化"
+                        );
+                    }
+                    let (after, n) = galaxy::replace_created_unit(&src, &from, &to, fname.as_deref());
+                    if n == 0 {
+                        println!("  {} 里没有可替换的创建调用 —— 进游戏不会有变化", gal.file_name().unwrap().to_string_lossy());
+                    } else {
+                        std::fs::write(&gal, after)?;
+                        println!("wrote {}: {} 处创建调用 {from} -> {to}", gal.display(), n);
+                    }
+                }
             }
+        }
+        Cmd::Normalize { root } => println!("{}", locale::normalize(&root)?),
+        Cmd::Localize { root, locale: loc, set } => {
+            let mut pairs = Vec::new();
+            for s in &set {
+                let (k, v) = s
+                    .split_once('=')
+                    .with_context(|| format!("--set 要写成 key=value，收到 {s}"))?;
+                pairs.push((k.to_string(), v.to_string()));
+            }
+            println!("{}", locale::set_keys(&root, &loc, &pairs)?);
         }
     }
     Ok(())
