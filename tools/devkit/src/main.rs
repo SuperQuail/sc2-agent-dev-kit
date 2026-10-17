@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, edit, galaxy, map, triggers};
+use devkit::{catalog, edit, galaxy, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -34,6 +34,14 @@ enum Cmd {
     Spawns { map: PathBuf },
     /// 在 Triggers 里找某个单位的引用（只列，不改）
     FindUnit { map: PathBuf, unit: String },
+    /// 把展开的地图目录打成单文件 MPQ（交付形态）
+    Pack {
+        /// 要打包的目录（如 x.SC2Map）
+        dir: PathBuf,
+        /// 输出文件；不给就同目录同名加 .SC2Map
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// 往地图/模组的 DocumentHeader 里追加一条依赖
     AddDep {
         root: PathBuf,
@@ -169,6 +177,15 @@ fn main() -> Result<()> {
             for (n, c) in &by {
                 println!("    {:<32} {}", n, c);
             }
+        }
+        Cmd::Pack { dir, out } => {
+            let bytes = mpq::pack_dir(&dir)?;
+            let out = out.unwrap_or_else(|| {
+                let s = dir.to_string_lossy().to_string();
+                PathBuf::from(format!("{}.SC2Map", s.trim_end_matches(['/', '\\'])))
+            });
+            std::fs::write(&out, &bytes)?;
+            println!("wrote {}: {} 字节", out.display(), bytes.len());
         }
         Cmd::AddDep { root, dep } => {
             let p = root.join("DocumentHeader");

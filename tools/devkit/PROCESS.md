@@ -199,6 +199,70 @@ B 的产出有两个性质不同的问题：
 > 换成 `Zergling` 才对——**工具报 0 不一定是工具错，可能是题目错。**
 
 ---
+## 1.6 交付形态：必须符合启动器的包约定
+
+> 启动器是 **HSCL**（`D:\Code\Rust\HSCL`），它的包格式契约在 `docs/package-format.md`（v2，权威）。
+> `docs/package-format-v3.md` **还是草案**，定稿前一切以 v2 为准。
+> `docs/package-authoring.md` 是面向作者的用法说明。
+
+**我们产出的任何交付物都必须能被它直接导入，不需要用户手工摆文件。**
+
+### 包形态（按优先级识别）
+
+| 形状 | 判据 |
+|---|---|
+| 标准包 | **包根**有 `metadata.json` |
+| CCM 包 | 包内任意层级有 `metadata.txt`（`键=值`，大小写不敏感） |
+| 镜像包 | 包根出现 `Maps/` 或 `Mods/` 顶层目录（**只认这个拼写**，小写 `maps/` 当内容目录） |
+| 最小地图包 | 只有 `.SC2Map`，无任何元数据 |
+
+### 地图载体：**单文件 MPQ 才是分发形态**
+
+| 载体 | 性质 |
+|---|---|
+| 单文件 `x.SC2Map`（MPQ 容器） | ✅ **分发用它** |
+| 展开目录 `x.SC2Map/Base.SC2Data/...` | 编辑器「存成组件」的**开发**形态，49 个碎文件 |
+
+启动器两种都收（`package-format.md` §1.6），但我们**必须交付单文件**：
+展开目录是源码形态，不是交付形态。
+**实测**：真实的 `.SC2Map` 是 MPQ，`EditorTest.SC2Map` 是 v1（32 字节头），
+`Enslavers Redux…SC2Map` 是 v3（208 字节头）——**两种引擎都认，所以写 v1 即可**。
+
+### 元数据字段（写进 `metadata.json` 的 `miyin` 对象）
+
+| 键 | 作用 |
+|---|---|
+| `name` / `author` / `description` | 显示名 / 作者 / 描述 |
+| `campaign` | 归属：**`wol`** / `hots` / `lotv` / `nova` / **`custom`**（自制战役 → 落 `Maps/CustomCampaigns/<包名>/`） |
+| `version` | 自由字符串，但**必须含至少一个数字**（否则启动器没法比新旧） |
+| `id` | 注册 ID，建议 `<作者短名>.<战役短名>` |
+| `mods` | **依赖的模组**。按 `Mods/` 之后**第一段**算，四种写法等价：`Alenger` / `Alenger.SC2Mod` / `Mods/Alenger` |
+| `overrides` | 铺到战役目录之外（如 `Mods/`），`to` 一律当目录 |
+| `miyin.format` | 扩展格式版本。**v2 契约表里写的是 1，authoring 文档写的是 2**——实施前必须定死一个 |
+
+### 几条硬约束
+
+1. **别在 `Maps/` 外面再套一层目录**（`我的战役/Maps/…`）——套了会被当任意分类目录，只取文件名，游戏可能扫不到
+2. **元数据放包根**
+3. **对官方战役的改版落 `Maps/Campaign/<子目录>/`**；自制战役落 `Maps/CustomCampaigns/<包名>/`，写进官方目录会污染且游戏不认
+4. **不要在包里放游戏本体文件**（`SC2Data/` 之类）
+5. **别塞几万个碎文件**——每个文件都会被记账
+
+### 对本项目的直接影响
+
+1. **新增能力 `sc2cat pack`**：把展开的地图目录打成单文件 MPQ。**没有它就无法交付。**
+2. **校验必须独立**：用 `mpyq`（纯 Python MPQ 读取器，已装）读回来对账，不能自己验自己
+3. 交付物结构固定为：
+
+```text
+<包名>.zip
+├── metadata.json                campaign=wol / mods=<依赖模组> / id / version
+└── Maps/Campaign/traynor01_zeratul.SC2Map     ← 单文件 MPQ
+```
+
+4. **mod 不打包进包**，用 `mods=` 声明依赖；缺失时启动器给 `MOD_MISSING` 警告而不是阻断
+
+---
 ## 2. 每期的完成定义（Definition of Done）
 
 | # | 要求 | 怎么证明 |

@@ -187,6 +187,7 @@ pub fn unit_values_named(xml: &str, names: &HashMap<String, String>) -> Result<V
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
