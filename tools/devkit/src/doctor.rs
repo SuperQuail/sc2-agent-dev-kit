@@ -148,9 +148,14 @@ pub fn check(pkg: &Path) -> Result<Vec<Finding>> {
     if missing.is_empty() {
         out.push(Finding::ok("依赖", format!("{} 条都能解析", deps.len())));
     } else {
-        out.push(Finding::bad(
+        // 降级为警告：游戏自带的模组（如 `Mods\StarCoop\...`）在 CASC 里，
+        // 磁盘上看不到文件，但运行时能解析。真缺的话进游戏会弹依赖错误。
+        out.push(Finding::warn(
             "依赖",
-            format!("这些既不在包里也没装 → 会弹「模块或地图关联内容已不可用」: {}", missing.join(", ")),
+            format!(
+                "这些在磁盘上找不到（可能是游戏自带的 CASC 模组；真缺会弹「模块或地图关联内容已不可用」）: {}",
+                missing.join(", ")
+            ),
         ));
     }
 
