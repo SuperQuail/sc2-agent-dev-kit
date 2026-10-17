@@ -9,8 +9,12 @@ SC2DATA="${SC2DATA:-D:/Game/BLZ/StarCraft II/SC2Data}"
 OUT="${1:?用法: repro.sh <输出目录>}"
 WORK="$OUT/work/traynor01.SC2Map"
 MOD="$OUT/work/kit_lotv_zeratul.SC2Mod"
+# 依赖模组的来源：没有它，localize 会凭空建一个只有本地化文件的空壳
+MOD_SRC="${MOD_SRC:-D:/Code/Python/银河编辑器/sc2agent-records/benchmark/out/finalmodF/kit_lotv_zeratul.SC2Mod}"
 
 rm -rf "$OUT"; mkdir -p "$OUT/work"
+[ -d "$MOD_SRC" ] || { echo "找不到依赖模组: $MOD_SRC（用 MOD_SRC=... 指一个）" >&2; exit 1; }
+cp -r "$MOD_SRC" "$MOD"
 
 echo '== 1/6 从 CASC 抽原件（递归！漏一层就会丢本地化与本地 GameData）'
 # 中文版只下载了 zhCN，其它语系读不到是正常的 —— 后一步 normalize 会补齐 12 个语系。
@@ -46,8 +50,17 @@ echo '== 5/6 汉化（就地替换，不是追加）'
   --set 'Abil/Name/ZeratulZealotBlink=闪烁' \
   --set 'Behavior/Name/ZeratulZealotWhirlwind=飓风'
 
-echo '== 6/6 打成单文件 MPQ'
-mkdir -p "$OUT/pkg/Maps/Campaign"
+echo '== 6/7 补协同作战上下文（没有它技能面板是空的）'
+"$SC2CAT" inject "$WORK" --fn gt_Init01Technology_Func \
+  --code 'TechTreeUpgradeAddLevel(gv_p1_USER, "ZeratulCommander", 1);' \
+  --code 'TechTreeUpgradeAddLevel(gv_p1_USER, "CommanderLevel", 0);'
+
+echo '== 7/7 打成单文件 MPQ + 装成可导入的包'
+mkdir -p "$OUT/pkg/Maps/Campaign" "$OUT/pkg/Mods"
 "$SC2CAT" pack "$WORK" --out "$OUT/pkg/Maps/Campaign/traynor01.SC2Map"
-cp -r "$MOD" "$OUT/pkg/Mods" 2>/dev/null || true
+cp -r "$MOD" "$OUT/pkg/Mods/kit_lotv_zeratul.SC2Mod"
+"$SC2CAT" package "$OUT/pkg" --name '自由日 · 萨尔那加狂热者' --campaign wol --mod kit_lotv_zeratul
+
+echo '== 自检（不通过会非零退出）=='
+"$SC2CAT" doctor "$OUT/pkg"
 echo '== 完成 =='

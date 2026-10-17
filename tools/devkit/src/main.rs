@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, edit, galaxy, locale, map, mpq, triggers};
+use devkit::{catalog, doctor, edit, galaxy, locale, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -28,6 +28,25 @@ enum Cmd {
         #[arg(long, default_value_t = 40)]
         limit: usize,
     },
+    /// 交付物自检：这一条命令回答「这个包是不是半成品」
+    Doctor { pkg: PathBuf },
+    /// 把 Maps/ + Mods/ 目录装成启动器能导入的 zip（补 metadata.json）
+    Package {
+        /// 含 Maps/ 与 Mods/ 的目录
+        pkg: PathBuf,
+        /// 输出 zip；不给就同目录同名
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// 包名（写进 metadata.json）
+        #[arg(long)]
+        name: String,
+        /// 归属资料片，如 wol / hots / lotv
+        #[arg(long, default_value = "wol")]
+        campaign: String,
+        /// 依赖的模组，按 Mods/ 后第一段算；可给多个
+        #[arg(long = "mod")]
+        mods: Vec<String>,
+    },
     /// 看一个 .SC2Map / .SC2Mod 目录里有什么
     Layout { root: PathBuf },
     /// 列出地图里的单位生成点（读生成的 MapScript.galaxy）
@@ -49,6 +68,16 @@ enum Cmd {
         /// 解到哪
         #[arg(long)]
         out: PathBuf,
+    },
+    /// 往某个触发器函数的动作段里插 Galaxy 代码（改了源不改产物等于没改）
+    Inject {
+        map: PathBuf,
+        /// 函数名，如 gt_Init01Technology_Func
+        #[arg(long)]
+        r#fn: String,
+        /// 要插入的代码行，可给多个，按顺序插
+        #[arg(long = "code", required = true)]
+        code: Vec<String>,
     },
     /// 往地图/模组的 DocumentHeader 里追加一条依赖
     AddDep {
@@ -150,6 +179,61 @@ fn main() -> Result<()> {
                 println!("  {:<28} {}", k, n);
             }
         }
+        Cmd::Doctor { pkg } => {
+            let findings = doctor::check(&pkg)?;
+            let mut bad = 0;
+            for f in &findings {
+                let (mark, line) = match f.level {
+                    doctor::Level::Ok => ("  ok  ", format!("{}: {}", f.item, f.detail)),
+                    doctor::Level::Warn => (" warn ", format!("{}: {}", f.item, f.detail)),
+                    doctor::Level::Bad => {
+                        bad += 1;
+                        (" FAIL ", format!("{}: {}", f.item, f.detail))
+                    }
+                };
+                println!("{mark}{line}");
+            }
+            if bad > 0 {
+                anyhow::bail!("{bad} 项没通过 —— 这个包还不能交付");
+            }
+            println!("全部通过");
+        }
+        Cmd::Package { pkg, out, name, campaign, mods } => {
+            // metadata.json 的字段类型是实测出来的：mods 必须是**数组**，
+            // 写成字符串会让整个文件解析失败、campaign 也跟着丢。
+            let mods_json = mods
+                .iter()
+                .map(|m| format!("\"{m}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let id = name.replace(' ', "-").to_lowercase();
+            let meta = format!(
+                "{{\n  \"name\": \"{name}\",\n  \"author\": \"devkit\",\n  \"version\": \"1.0\",\n  \"campaign\": \"{campaign}\",\n  \"miyin\": {{\n    \"format\": 2,\n    \"id\": \"devkit.{id}\",\n    \"mods\": [{mods_json}]\n  }}\n}}\n"
+            );
+            std::fs::write(pkg.join("metadata.json"), meta)?;
+            println!("wrote {}/metadata.json", pkg.display());
+
+            let zip = out.unwrap_or_else(|| pkg.with_extension("zip"));
+            // 用平台自带的 tar 归档：Windows 10+ 的 bsdtar 认扩展名，别自己写 zip 格式
+            // 显式列出顶层项：用 `.` 会让每个条目带上 `./` 前缀，启动器认不出根下的 Maps/。
+            let mut cmd = std::process::Command::new("tar");
+            cmd.arg("-a").arg("-c").arg("-f").arg(&zip).arg("-C").arg(&pkg);
+            for top in ["Maps", "Mods", "metadata.json"] {
+                if pkg.join(top).exists() {
+                    cmd.arg(top);
+                }
+            }
+            let st = cmd.status()?;
+            if !st.success() {
+                anyhow::bail!("tar 归档失败（退出码 {:?}）", st.code());
+            }
+            println!(
+                "wrote {}: {} 字节",
+                zip.display(),
+                std::fs::metadata(&zip).map(|m| m.len()).unwrap_or(0)
+            );
+            println!("接着跑一遍 sc2cat doctor {} 确认", pkg.display());
+        }
         Cmd::Layout { root } => {
             let l = map::layout(&root)?;
             let show = |t: &str, p: &Option<PathBuf>| match p {
@@ -216,6 +300,21 @@ fn main() -> Result<()> {
             });
             std::fs::write(&out, &bytes)?;
             println!("wrote {}: {} 字节", out.display(), bytes.len());
+        }
+        Cmd::Inject { map: mp, r#fn, code } => {
+            let gal = ["MapScript.galaxy", "mapscript.galaxy"]
+                .iter()
+                .map(|n| mp.join(n))
+                .find(|p| p.is_file())
+                .context("这个目录里没有 MapScript.galaxy")?;
+            let src = std::fs::read_to_string(&gal)?;
+            let refs: Vec<&str> = code.iter().map(String::as_str).collect();
+            let (after, ok) = galaxy::inject_into_fn(&src, &r#fn, &refs);
+            if !ok {
+                anyhow::bail!("{} 里找不到 {} 的动作段，文件未改动", gal.display(), r#fn);
+            }
+            std::fs::write(&gal, after)?;
+            println!("wrote {}: {} 行插进 {}", gal.display(), code.len(), r#fn);
         }
         Cmd::Unpack { file, out } => {
             let entries = mpq::read_entries(&file)?;

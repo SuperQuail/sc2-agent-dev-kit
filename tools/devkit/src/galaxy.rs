@@ -60,6 +60,51 @@ pub fn replace_created_unit(src: &str, from: &str, to: &str, scope_fn: Option<&s
     (out, n)
 }
 
+/// 在某个触发器函数的**动作段开头**插入几行 Galaxy 代码。
+///
+/// 插在 `if (!runActions) { return true; }` 之后 —— 这是编辑器生成的动作段入口。
+/// 产物侧必须这么改：游戏跑的是这个文件，`Triggers` 只是编辑器的源。
+///
+/// 返回 (新文本, 是否插进去了)。
+pub fn inject_into_fn(src: &str, fn_name: &str, code: &[&str]) -> (String, bool) {
+    let sig = format!("bool {fn_name} (");
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let Some(start) = lines.iter().position(|l| l.contains(sig.as_str())) else {
+        return (src.to_string(), false);
+    };
+    // 守卫长这样：`if (!runActions) {` / `return true;` / `}` —— 插在收尾那个 `}` 之后
+    let mut at = None;
+    if let Some(g) = lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(i, l)| *i > start && l.contains("(!runActions)"))
+        .map(|(i, _)| i)
+    {
+        at = lines
+            .iter()
+            .enumerate()
+            .skip(g)
+            .find(|(_, l)| l.trim() == "}")
+            .map(|(i, _)| i);
+    }
+    let Some(at) = at else {
+        return (src.to_string(), false);
+    };
+    let mut out = String::with_capacity(src.len());
+    for (i, l) in lines.iter().enumerate() {
+        out.push_str(l);
+        if i == at {
+            for c in code {
+                out.push_str("    ");
+                out.push_str(c);
+                out.push('\n');
+            }
+        }
+    }
+    (out, true)
+}
+
 /// 扫一个 .galaxy 文件里的 UnitCreate 调用。
 pub fn spawns(galaxy: &Path) -> Result<Vec<Spawn>> {
     let src = std::fs::read_to_string(galaxy)
@@ -253,6 +298,41 @@ mod tests {
         assert_eq!(s[0].player, "gv_pLAYER_01");
         assert_eq!(s[0].line, 1);
         assert!(s[0].text.starts_with("UnitCreate(8"));
+    }
+
+    #[test]
+    fn 插在动作段开头且不越界() {
+        let src = r#"bool gt_Init01Technology_Func (bool testConds, bool runActions) {
+    // Automatic Variable Declarations
+    // Actions
+    if (!runActions) {
+        return true;
+    }
+
+    libCamp_gf_SetTechRestrictionsCallback(TriggerGetCurrent());
+    return true;
+}
+
+bool gt_Other_Func (bool a, bool b) {
+    UnitCreate(1, "Marine", 0, gv_P, Point(0,0), 0.0);
+}
+"#;
+        let (out, ok) = inject_into_fn(src, "gt_Init01Technology_Func", &["TechTreeUpgradeAddLevel(gv_p1_USER, \"X\", 1);"]);
+        assert!(ok);
+        let lines: Vec<&str> = out.lines().collect();
+        let at = lines.iter().position(|l| l.contains("TechTreeUpgradeAddLevel")).unwrap();
+        // 必须插在动作段里（runActions 守卫之后），且不能跑到别的函数去
+        assert!(lines[..at].iter().any(|l| l.contains("runActions")));
+        assert!(lines[at..].iter().any(|l| l.contains("SetTechRestrictionsCallback")));
+        assert_eq!(out.matches("gt_Other_Func").count(), 1);
+    }
+
+    #[test]
+    fn 函数不存在时不改动() {
+        let src = "bool gt_A_Func (bool t, bool r) {\n    return true;\n}\n";
+        let (out, ok) = inject_into_fn(src, "gt_NotThere_Func", &["x();"]);
+        assert!(!ok);
+        assert_eq!(out, src, "失败时必须原样返回");
     }
 
     #[test]
