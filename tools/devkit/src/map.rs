@@ -62,6 +62,8 @@ pub struct Layout {
     pub gamedata: Vec<PathBuf>,
     /// `ComponentList.SC2Components`——它声明了依赖。
     pub component_list: Option<PathBuf>,
+    /// 地图上**预置**的单位/装饰物（纯文本 XML，不是二进制）。
+    pub objects: Option<PathBuf>,
 }
 
 pub fn layout(root: &Path) -> Result<Layout> {
@@ -90,5 +92,29 @@ pub fn layout(root: &Path) -> Result<Layout> {
         mapscript: at("MapScript.galaxy"),
         gamedata,
         component_list: at("ComponentList.SC2Components"),
+        objects: at("Objects").or_else(|| at("objects")),
     })
+}
+
+/// 换掉地图里**预置单位**的类型：改 `Objects` 里 `UnitType="…"` 的值。
+///
+/// 预置单位不像触发器生成的那些有代码可改 —— 它们只是 XML 里一个属性。
+/// 实测战役图 `Objects` 全是纯文本 XML（UTF-8 无 BOM、CRLF），103 张 103 张都是。
+///
+/// **必须连引号一起匹配**：文件里还有 `SMMarine03` / `SMRaynorMarine` 这类 id，
+/// 裸替换 `Marine` 会把它们改坏。
+///
+/// 不用动 `Objects.version`：它只是「最后一次写入」的元数据，不是内容摘要。
+pub fn replace_placed_unit(root: &Path, from: &str, to: &str) -> Result<(usize, PathBuf)> {
+    let l = layout(root)?;
+    let objects = l.objects.context("这个目录里没有 Objects")?;
+    let body = std::fs::read_to_string(&objects).context("Objects 不是 UTF-8 文本")?;
+    let needle = format!("UnitType=\"{from}\"");
+    let repl = format!("UnitType=\"{to}\"");
+    let n = body.matches(&needle).count();
+    if n == 0 {
+        bail!("Objects 里没有 {needle}");
+    }
+    std::fs::write(&objects, body.replace(&needle, &repl))?;
+    Ok((n, objects))
 }

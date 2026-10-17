@@ -28,6 +28,14 @@ enum Cmd {
         #[arg(long, default_value_t = 40)]
         limit: usize,
     },
+    /// 换掉地图里**预置单位**的类型（改 Objects 的 UnitType 属性，不是触发器）
+    SetPlacedUnit {
+        map: PathBuf,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
     /// 交付物自检：这一条命令回答「这个包是不是半成品」
     Doctor { pkg: PathBuf },
     /// 把 Maps/ + Mods/ 目录装成启动器能导入的 zip（补 metadata.json）
@@ -117,6 +125,13 @@ enum Cmd {
         #[arg(long = "drop-prefix", required = true)]
         drop_prefix: Vec<String>,
     },
+    /// 按参考表「影子裁」：只删参考表里也有的键（依赖 mod 抄了基础战役文本时用）
+    PruneShadowing {
+        root: PathBuf,
+        /// 参考文件，如战役自己的 GameStrings.txt
+        #[arg(long)]
+        reference: PathBuf,
+    },
     /// 就地设置本地化字符串（命中已有键就替换；替换不了才追加）
     Localize {
         root: PathBuf,
@@ -188,6 +203,10 @@ fn main() -> Result<()> {
             for (k, n) in counts.iter().take(limit) {
                 println!("  {:<28} {}", k, n);
             }
+        }
+        Cmd::SetPlacedUnit { map: mp, from, to } => {
+            let (n, p) = map::replace_placed_unit(&mp, &from, &to)?;
+            println!("wrote {}: {} 处 UnitType=\"{from}\" -> \"{to}\"", p.display(), n);
         }
         Cmd::Doctor { pkg } => {
             // 交付物是 zip，自检也得能吃 zip —— 解到临时目录再查。
@@ -446,6 +465,9 @@ fn main() -> Result<()> {
         }
         Cmd::Normalize { root } => println!("{}", locale::normalize(&root)?),
         Cmd::PruneLocale { root, drop_prefix } => println!("{}", locale::prune(&root, &drop_prefix)?),
+        Cmd::PruneShadowing { root, reference } => {
+            println!("{}", locale::prune_shadowing(&root, &reference)?)
+        }
         Cmd::Localize { root, locale: loc, set } => {
             let mut pairs = Vec::new();
             for s in &set {

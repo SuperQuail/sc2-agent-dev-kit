@@ -132,6 +132,66 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) -> R
 ///
 /// 裁掉 `Conversation/` / `ConversationState/` / `Param/` 这类**战役专属前缀**即可：
 /// mod 自己的 `Button/` / `Effect/` / `Unit/` / `UserData/` 都留着。
+/// 从 `reference` 文件里读出全部键，把这些键从 `root` 下所有语系里删掉。
+///
+/// 这是「按影子裁」：第三方 mod 若抄了基础战役的整份文本，那些键和战役自己的冲突。
+/// **只删战役也定义过的键** —— mod 自己独有的键（对话字幕、`StringExternal` 取的参数）全留着。
+/// 按前缀粗暴裁会误删后者，这是实测踩过的。
+pub fn prune_shadowing(root: &Path, reference: &Path) -> Result<String> {
+    let raw = std::fs::read(reference).with_context(|| format!("读不了 {}", reference.display()))?;
+    let body = String::from_utf8_lossy(raw.strip_prefix(BOM).unwrap_or(&raw)).to_string();
+    let keys: std::collections::HashSet<String> = body
+        .lines()
+        .filter(|l| l.contains('='))
+        .map(|l| l.split('=').next().unwrap_or("").to_string())
+        .collect();
+
+    let mut n = 0usize;
+    let mut files = 0usize;
+    for loc in std::fs::read_dir(root)? {
+        let loc = loc?.path();
+        let name = loc.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        if !loc.is_dir() || !name.ends_with(".sc2data") || name == "base.sc2data" {
+            continue;
+        }
+        let data = loc.join("LocalizedData");
+        if !data.is_dir() {
+            continue;
+        }
+        for txt in std::fs::read_dir(&data)?.flatten().map(|e| e.path()) {
+            if !txt.is_file() {
+                continue;
+            }
+            let raw = std::fs::read(&txt)?;
+            let bom = raw.starts_with(BOM);
+            let body = String::from_utf8_lossy(raw.strip_prefix(BOM).unwrap_or(&raw)).to_string();
+            let mut kept: Vec<&str> = Vec::new();
+            let mut dropped = 0usize;
+            for line in body.lines() {
+                let k = line.split('=').next().unwrap_or("");
+                if line.contains('=') && keys.contains(k) {
+                    dropped += 1;
+                } else {
+                    kept.push(line);
+                }
+            }
+            if dropped > 0 {
+                let mut out = Vec::new();
+                if bom {
+                    out.extend_from_slice(BOM);
+                }
+                out.extend_from_slice(kept.join("\n").as_bytes());
+                out.push(b'\n');
+                std::fs::write(&txt, out)?;
+                n += dropped;
+                files += 1;
+            }
+        }
+    }
+    Ok(format!("按 {} 的影子裁掉 {} 个键（{} 个文件）", reference.display(), n, files))
+}
+
+/// 按前缀裁（粗暴版）。要精确请用 `prune_shadowing`。
 pub fn prune(root: &Path, drop_prefixes: &[String]) -> Result<String> {
     let mut dropped = 0usize;
     let mut files = 0usize;
