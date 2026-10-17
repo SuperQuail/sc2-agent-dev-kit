@@ -180,6 +180,25 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Doctor { pkg } => {
+            // 交付物是 zip，自检也得能吃 zip —— 解到临时目录再查。
+            // bsdtar 会把 `D:` 当远程主机，所以 cd 到父目录只传裸文件名。
+            let pkg = if pkg.is_file() {
+                let dir = std::env::temp_dir().join("sc2cat-doctor");
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir)?;
+                let zip_dir = pkg.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let zip_name = pkg.file_name().map(|n| n.to_os_string()).context("输入名不合法")?;
+                let st = std::process::Command::new("tar")
+                    .current_dir(zip_dir)
+                    .arg("-x").arg("-f").arg(&zip_name).arg("-C").arg(&dir)
+                    .status()?;
+                if !st.success() {
+                    anyhow::bail!("解不开 {}（不是 tar/zip？）", pkg.display());
+                }
+                dir
+            } else {
+                pkg
+            };
             let findings = doctor::check(&pkg)?;
             let mut bad = 0;
             for f in &findings {
@@ -216,8 +235,14 @@ fn main() -> Result<()> {
             let zip = out.unwrap_or_else(|| pkg.with_extension("zip"));
             // 用平台自带的 tar 归档：Windows 10+ 的 bsdtar 认扩展名，别自己写 zip 格式
             // 显式列出顶层项：用 `.` 会让每个条目带上 `./` 前缀，启动器认不出根下的 Maps/。
+            // bsdtar 会把 `D:` 当远程主机（`Cannot connect to D`），所以 cd 到父目录只传裸文件名。
+            let zip_dir = zip.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let zip_name = zip.file_name().map(|n| n.to_os_string()).context("输出名不合法")?;
+            // -C 的路径必须绝对：current_dir 已经换了，相对路径会指错地方。
+            let pkg_abs = std::path::absolute(&pkg)?;
             let mut cmd = std::process::Command::new("tar");
-            cmd.arg("-a").arg("-c").arg("-f").arg(&zip).arg("-C").arg(&pkg);
+            cmd.current_dir(zip_dir);
+            cmd.arg("-a").arg("-c").arg("-f").arg(&zip_name).arg("-C").arg(&pkg_abs);
             for top in ["Maps", "Mods", "metadata.json"] {
                 if pkg.join(top).exists() {
                     cmd.arg(top);

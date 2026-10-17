@@ -479,6 +479,50 @@ Blizzard 的文件带 `\xef\xbb\xbf`，手写的不带就**读不到**。
 
 > 这条本身就是「自检也有盲区」的例子：`doctor` 查的是**能不能解析**，不是**包是不是完整**。
 
+## K. 盲测第二轮的收获（2026-10-17）
+
+按 `BLIND-TEST-BRIEF.md` 写任务书重跑，**6 条验收标准全过**，12 分钟。
+说明「验收标准可数 + 交付形态说清 + 已知前提列全」确实管用。
+
+### K1. `doctor` 不认 zip（已修）
+
+交付物是 zip，自检却只吃目录 —— 最尴尬的一种不自洽。
+现在 `doctor` 可以直接吃 zip（内部用平台 `tar` 解到临时目录）。
+
+### K2. bsdtar 会把 `D:` 当成远程主机（已修）
+
+`tar -f D:/x.zip` 报 `Cannot connect to D: resolve failed`。
+修法：`current_dir` 到父目录 + 只传裸文件名；另外 `-C` 的目标**必须是绝对路径**，
+因为 `current_dir` 换过之后相对路径会指错地方。
+
+### K3. `inject` 只写 `MapScript.galaxy`，不写 `Triggers`（已改说明）
+
+它和 `set-unit`（两边都写）行为不一致，而 help 里那句「改了源不改产物等于没改」**反而误导**。
+真实约束：用 Galaxy 代码往 `Triggers` 里补 GUI 动作、得构造带 id 的 Element，成本远高于收益 ——
+所以 `inject` 只写产物，**代价是编辑器打开并保存这张图时会被覆盖**。help 已改成说实话。
+
+### K4. `package` 的 help 没说它也能吃 `.SC2Mod`（已改）
+
+### K5. 我自己的一处**真错误**：多余的 `CampaignContext.xml`（已删）
+
+为了让技能面板亮起来，我在 mod 里新建了 `CampaignContext.xml`，定义了
+`CUpgrade ZeratulCommander` / `CommanderLevel` 两个极简升级。
+
+盲测者反查发现 `ZeratulCommander` 在 `UpgradeData.xml` 里没有对应条目 —— 它搜窄了。
+但顺着它查下去发现了**真问题**：
+
+| id | mod 里本来就有 | 在哪 |
+|---|---|---|
+| `ZeratulCommander` | ✅ 而且是**十几条 `EffectArray`** 的丰富定义 | `commanders/commanderzeratul.xml` |
+| `CommanderLevel` | ✅ | `UpgradeData.xml` |
+
+**我那份是重复定义，只会覆盖掉丰富的那个** —— 会让星灵枢纽/探针的改名等 EffectArray 失效。
+
+真正让面板亮起来的是地图里那条 `TechTreeUpgradeAddLevel`，不是这个文件。**已删除。**
+
+> 教训：**先查依赖里有没有，再决定要不要自己造。**
+> 一个「看起来解决了问题」的重复定义，代价可能是悄悄毁掉别人的数据。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |
