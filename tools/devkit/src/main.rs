@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, deps, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
+use devkit::{catalog, closure, deps, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -42,6 +42,18 @@ enum Cmd {
         original: PathBuf,
         /// 我们交付的拷贝
         ours: PathBuf,
+    },
+    /// 只看**某个单位**的链路：它引用了哪些 id、其中哪些被别的依赖抢走
+    UnitClosure {
+        map: PathBuf,
+        #[arg(long = "search", required = true)]
+        search: Vec<PathBuf>,
+        /// 起点 id，可给多个
+        #[arg(long = "unit", required = true)]
+        unit: Vec<String>,
+        /// 从这个依赖目录出发算闭包（是 search 下的相对路径，如 Mods/kit_lotv_zeratul.SC2Mod）
+        #[arg(long)]
+        within: String,
     },
     /// 依赖冲突检查：展开整条依赖闭包，列出同一个 id 被谁定义了几次、谁赢
     DepConflicts {
@@ -251,6 +263,57 @@ fn main() -> Result<()> {
                 println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
             } else {
                 anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
+        }
+        Cmd::UnitClosure { map: mp, search, unit, within } => {
+            let (nodes, _missing) = deps::closure(&mp, &search)?;
+            let me = nodes
+                .iter()
+                .position(|n| deps::path_of(&n.dep).is_some_and(|p| p.eq_ignore_ascii_case(&within)))
+                .with_context(|| format!("闭包里没有 {within}"))?;
+            let mine = closure::scan(&nodes[me].root)?;
+            println!(
+                "学出来的引用属性（{} 个）: {}",
+                mine.ref_attrs.len(),
+                mine.ref_attrs.iter().cloned().collect::<Vec<_>>().join(" ")
+            );
+            let reach = closure::reachable(&mine, &unit);
+            println!("从 {:?} 出发可达 {} 个 id（在 {} 里）", unit, reach.len(), within);
+            // 别的依赖的 id 集**先算一次** —— 对每个 id 重扫全部文件是平方复杂度，实测会跑死。
+            let mut others: Vec<std::collections::BTreeSet<(String, String)>> = Vec::new();
+            for (i, n) in nodes.iter().enumerate() {
+                if i == me {
+                    others.push(Default::default());
+                    continue;
+                }
+                let mut set = std::collections::BTreeSet::new();
+                for f in catalog::xml_files(&n.root) {
+                    for e in catalog::entries_in(&f).unwrap_or_default() {
+                        set.insert((e.kind, e.id));
+                    }
+                }
+                others.push(set);
+            }
+            let mut stolen = 0usize;
+            for id in &reach {
+                let Some((kind, _, _)) = mine.by_id.get(id) else { continue };
+                let who: Vec<String> = others
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, s)| *i != me && s.contains(&(kind.clone(), id.clone())))
+                    .map(|(i, _)| format!("#{}", i + 1))
+                    .collect();
+                if who.is_empty() {
+                    continue;
+                }
+                stolen += 1;
+                println!("  {kind} {id}  ← 也被 {} 定义", who.join("/"));
+            }
+            println!();
+            if stolen == 0 {
+                println!("这条链路上没有和别的依赖撞名的 id —— 冲突不在链路本身");
+            } else {
+                println!("链路里 {stolen} 个 id 被别人也定义了。保持原优先级 = 别人赢；要自己赢只能重命名这些 id");
             }
         }
         Cmd::DepConflicts { map: mp, search, kind } => {

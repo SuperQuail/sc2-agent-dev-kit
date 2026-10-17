@@ -1,5 +1,6 @@
 //! devkit 核心库。二进制 `sc2cat` 是它的一层壳。
 pub mod catalog;
+pub mod closure;
 pub mod deps;
 pub mod doctor;
 pub mod drift;
