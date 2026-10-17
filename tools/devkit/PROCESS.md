@@ -145,6 +145,60 @@ sc2agent-records/benchmark/work/accept-01.ps1              人工验收脚本
 ```
 
 ---
+**W3/W4 完成，第一个可人工验收的部分就绪（2026-10-17）**
+
+### 派发结果（诚实记录）
+
+| 子 agent | 任务 | 结果 |
+|---|---|---|
+| A | `galaxy.rs` 解析 `UnitCreate` | ✅ **一次成功**。7 个测试、11 处 UnitCreate 与独立 Python 计数一致 |
+| B | `triggers.rs` + `edit.rs` | ❌ **退回重写** |
+
+B 的产出有两个性质不同的问题：
+
+1. **结构性错误**：它在 `ValueGameType` 处往上找**仍在栈上**的 `<Value>`，
+   但 `<Value>Zergling</Value>` 在那之前**已经闭合出栈**了；而且 `<ValueGameType Type="Unit"/>` 是自闭合的，
+   代码只处理非自闭合标签。结果是对任何输入都返回空。**它不是一行能修的。**
+2. **契约与实现不符**：`splice` 的重叠检查没实现，有测试还断言了与契约相反的期望。
+
+另外 B 写的两个中文测试函数名带了空格（`fn 空_edits 返回原文()`），编译不过。
+
+**教训**：子 agent 交付后必须自己跑一遍它的验收命令。B 从未报告成功（它的消息没发出来），
+而它的文件看起来「写完了」——`TODO` 标记没了、行数够了。**「看起来完成」不等于完成。**
+
+### 端到端验收（`accept-01.ps1`，退出码 0）
+
+用参考地图 `paiur01.SC2Map` 当替身：
+
+```text
+1 layout              地图结构：Triggers / MapScript / 13 个 GameData
+2 spawns              11 处 UnitCreate（Zergling/Roach/Hydralisk/Mutalisk × 2 波）
+3 find-unit Zergling  193 处 Unit 引用，Zergling 占 17 处（含字节范围）
+4 set-unit --dry-run  17 处，且文件 sha256 不变
+5 set-unit            真的落盘
+6 改动相称            字节 -51 = 17×3；变化行数 17；每行差异恰好是那处替换
+```
+
+### 验收判据的一个坑（值得记下来）
+
+第一版判据是「同一索引逐字节比对」——**错的**。替换让后面所有字节平移 3 位，
+同索引比对报了 2,301,165 处「不同」。改成**行级比对**才对：行数不变、变化行数等于处数、
+每行差异恰好等于那处替换。
+
+### 新的独立对账结果
+
+| 项 | 工具 | 独立 Python |
+|---|---|---|
+| `spawns` UnitCreate | 11 | 11 ✓ |
+| `find-unit` 全部 Unit 引用 | 193 | 193 ✓ |
+| `find-unit Zergling` | 17 | — |
+| 替换后字节差 | -51 | 17 × (5-8) = -51 ✓ |
+
+> 一个反直觉的事实：`<Value>Zealot</Value>` 这张图里只有 1 处，**且不属于 Unit 类型的 Param**，
+> 所以 `find-unit Zealot` 报 0 是**正确的**。第一版验收脚本选错了演示单位，
+> 换成 `Zergling` 才对——**工具报 0 不一定是工具错，可能是题目错。**
+
+---
 ## 2. 每期的完成定义（Definition of Done）
 
 | # | 要求 | 怎么证明 |
