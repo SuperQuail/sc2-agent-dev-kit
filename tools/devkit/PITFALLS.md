@@ -282,6 +282,67 @@ UnitCargoCreate(gv_introDropship, "Marine", 5);     // ← 这五个
 说明 `ZeratulZealot` 这个 `CUnit` 在运行时确实不存在，问题在 mod 加载本身。
 最后改用**完整未精简的 mod** 做对照实验，就是为了切断「精简」这个变量。
 
+### G12. 移植协同作战单位：卡技能的是**建筑**，不是升级
+
+把 `ZeratulZealot` 放到战役图上后技能栏是空的。查下来门控是：
+
+```text
+HaveZeratulArtifactTier1AndCyberCore
+  = AndCountUnitZeratulCyberneticsCoreCompleteOnly
+    + CountUpgradeZeratulArtifactTier1CompleteOnly
+```
+
+**要求一个「泽拉图控制核心」建筑**——协同作战专有，战役图上不存在。
+所以「发给玩家升级」这条修路走不通：**建筑那一半永远满足不了**。
+
+### G13. 「面板什么都不显示」的正确修法是让**锁定态可见**，不是解开门控（★）
+
+我第一反应是把 5 处 `Requirements` 全删掉。**这是错的**——用户要的是「像正常情况那样显示尚未获得的科技」。
+
+正确机制：SC2 用 **`parent="ResearchLocked"` 的锁形占位按钮**表示「未获得」。
+
+原 mod 的卡片布局是**一个槽位挂两个按钮、靠 Requirements 互斥**：
+
+| 槽位 | 正常时显示 | 未获得时显示 |
+|---|---|---|
+| 1,0 | `ZeratulZealotWhirlwindPassive`（Tier1） | **（作者漏了占位）** |
+| 1,1 | `ZeratulZealotStunPassive`（Tier2） | `ZeratulLockedLevel3` |
+| 1,2 | `ZeratulZealotRetreatPassive`（Tier3） | `ZeratulLockedLevel11` |
+
+**坑在占位按钮的门控是指挥官等级**（`ZeratulLevel03` / `ZeratulLevel11`）——
+战役图里没有指挥官等级，所以**占位也不显示**，整个第一行为空。
+
+**修法**：加反向 requirement，把占位的门控从「等级到了」改成「对应科技还没拿到」：
+
+```xml
+<CRequirementNot id="NotHaveZeratulArtifactTier1AndCyberCore">
+    <NodeArray index="Use" Link="HaveZeratulArtifactTier1AndCyberCore"/>
+</CRequirementNot>
+```
+
+然后 `Requirements="ZeratulLevel03"` → `Requirements="NotHaveZeratulArtifactTier2AndCyberCore"`，
+并给 1,0 补一个原本缺失的占位。
+
+**原有的科技门控一个都不要删**——删了就等于把「未获得」这个状态本身删掉了。
+
+### G14. 单位显示名在 `Actor/Name`，不在 `Unit/Name`
+
+这个 mod 里**没有** `Unit/Name/ZeratulZealot`，显示名是 `Actor/Name/ZeratulZealot=Xel'Naga Warrior`。
+汉化时两个键都写一份最稳。
+
+### G15. 任务简报也是触发器里的 Marine
+
+「开场运输机卸下的 5 个」和「任务简报页面的陆战队员」是**两组不同**的调用点：
+
+| 触发器 | 处数 | 归属玩家 |
+|---|---|---|
+| `CC2D6739` Intro Cinematic | 1 | `gv_p1_USER`（`UnitCargoCreate(..., 5)`） |
+| `EEEC2125` Intro Cleanup - Escape | 5 | `gv_p1_USER` |
+| `5E09D203` Briefing Scene 00 | 4 | `gv_p2_DOMINION_RED` |
+| `F12B8538` Briefing Scene 01 | 4 | `gv_p4_ACTORS_BLUE` |
+
+合计 14 处，`triggers` 与 `mapscript.galaxy` **两处都要改**，字节变化应为 `14 × 7 = 98`（`"Marine"` 8 字符 → `"ZeratulZealot"` 15 字符）。
+
 ### G10. DocumentHeader 的依赖表有两种串格式
 
 ```text
