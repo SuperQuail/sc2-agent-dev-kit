@@ -157,6 +157,128 @@
 - 用特殊字符当反引号占位符，结果和章节号冲突（「见 §7」被替换成「见 `7」）。
 - 改进：占位符换成不会出现在正文里的字符。
 
+
+## G. CASC 原件与地图基底（2026-10-17 追记）
+
+> 这一段是「做自由日替换地图」全过程踩出来的。**顺序即教训**。
+
+### G1. 不要拿参考项目当基底
+
+我一开始从参考目录里的战役包取 `traynor01.SC2Map`，结果是别人的改版：依赖 `3疯批帝国之翼` / `kit_liberty_story` / `Alenger`（合计 236 MB），为单位换名（`Marine` → `WarPigLand` → `3diguochongfengdui`）。
+为了让地图能跑，我又把这些 mod 全打进包——**整条链都是错的**。
+
+**真实开发不会提供这些参考。** 基底只能从游戏本体取。
+
+### G2. SC2 的地图在 CASC 里，是解开形态
+
+`casc` CLI（`casc-cli`，包 Zezula 的 CascLib，有 Windows 预编译 + sha256）能直接读 SC2 的 CASC：
+
+```text
+CASC 总条目 779,211   其中 .sc2map 6,479
+campaigns\liberty.sc2campaign\base.sc2maps\maps\campaign\traynor01.sc2map\
+```
+
+**这一层是编辑器组件形态**，不是打包的 MPQ。
+
+### G3. 抽取必须用递归通配
+
+```bash
+casc extract -o out <SC2Data> "…/traynor01.sc2map/*"     # ✗ 只有一层
+casc extract -o out <SC2Data> "…/traynor01.sc2map/**"    # ✓ 递归
+```
+
+用 `*` 时漏掉了 **嵌套子目录**——正好是最关键的两个：
+
+```text
+base.sc2data\gamedata\terraindata.xml      地图本地 GameData
+base.sc2data\gamedata\unitdata.xml
+base.sc2data\gamedata\waterdata.xml
+zhcn.sc2data\localizeddata\gamestrings.txt  中文字符串
+```
+
+**症状：进游戏文本全是英文、部分键缺失。** 32 个 vs 48 个的差别全在这里。
+
+### G4. ComponentList 必须与实际语系一致
+
+`componentlist.sc2components` 声明了 12 个语系，但游戏只下载了 `zhcn`（其余在 CASC 里抽不出来）。
+**声明了却没有文件，本身就是「缺键」的来源。** 交付前要把 `text` 条目收敛到实际存在的语系。
+
+### G5. `base.sc2data` 不是语系
+
+清理空语系目录时按「没有 gamestrings 就删」处理，结果把 `base.sc2data`（里面是地图本地 GameData）**一起删了**。
+判据要加一条：`loc == 'base'` 时跳过。
+
+### G6. `triggers` 与 `mapscript.galaxy` 是两回事（本条最贵）
+
+| 文件 | 是什么 | 谁在用 |
+|---|---|---|
+| `triggers` | 编辑器的**源**（触发器图） | **只有编辑器** |
+| `mapscript.galaxy` | 从触发器编译出的 Galaxy 代码 | **游戏运行时执行的是它** |
+
+我改了 6 处 `triggers`，进游戏**毫无变化**——游戏跑的是没改过的 `mapscript.galaxy`。
+
+**套件规则「不手改 MapScript.galaxy」的前提是「在编辑器里开发」**（编辑器保存会重新生成）。
+但**产出交付物**时没有编辑器参与，必须同时改它，否则改动不生效。
+
+> 工具侧结论：`sc2cat set-unit` 必须**同时改两份**——`triggers` 里的 `Param` 与 `mapscript.galaxy` 里的字面量调用，按同一组调用点对齐。
+
+验证信号：改完 `mapscript.galaxy` 后，**原本的陆战队员消失了** → 说明改动生效了。剩下的问题就不在触发层。
+
+### G7. 单位 id 在不同改版里不一样
+
+同一个「运输机上下来的陆战队员」，在三张图里是三个 id：
+
+| 图 | id |
+|---|---|
+| 暴雪原版 | `Marine` |
+| 枪兵之翼 | `WarPigLand` |
+| 测试1（帝国之翼系） | `3diguochongfengdui` |
+
+**在原版里搜 `WarPigLand` 一处都搜不到**——所以选错基底时，「目标单位」这个词本身就变了。
+
+原版真正的结构（`gt_IntroCinematic_Func`）：
+
+```galaxy
+libNtve_gf_CreateUnitsAtPoint2(1, "SpecialOpsDropship", 0, gv_p1_USER, PointFromId(379));
+gv_introDropship = UnitLastCreated();
+UnitCargoCreate(gv_introDropship, "Raynor01", 1);   // 雷诺
+UnitCargoCreate(gv_introDropship, "Marine", 5);     // ← 这五个
+```
+
+配合 `gt_IntroCargoUnload_Func`（卸货时 `UnitSetOwner(EventUnitCargo(), gv_p1_USER)`）
+与 `gt_IntroCleanupEscape_Func`（过场结束**再造 5 个**给玩家操作）——**两段都要改**。
+
+### G8. 精简 mod：catalog 闭包看不到 `.m3` 内部引用
+
+按 catalog 引用做闭包（45,816 条 → 1,005 条）后，`Assets` 只剩 20 个文件。
+但 `Zealot_Ihanrii_Elite.m3` **内部**还引用了 27 个贴图路径——这些**不在任何 catalog XML 里**，闭包看不见。
+
+> 本例里那 27 个其实是暴雪自带资源（原 mod 里也没有），所以不是本次故障原因；
+> 但**机制上的坑是真的**：模型文件的内部引用必须单独扫。
+
+### G9. 组件格式 mod 的 `.version` 与 `Preload.xml`
+
+精简时把 `DocumentInfo.version` / `GameData.version` / `GameText.version` / `Preload.xml` 一起丢了。
+原 mod 四个都有。组件格式靠 `.version` 识别组件，缺了有理由怀疑整个 `gada` 组件被跳过。
+
+**最终仍未确认**是哪一项导致 `ZeratulZealot` 造不出来——所以最后改用**完整未精简的 mod**做对照。
+
+### G10. DocumentHeader 的依赖表有两种串格式
+
+```text
+file:Mods\X.SC2Mod                                 裸的形式
+bnet:Liberty (Mod)/0.0/999,file:Mods/Liberty.SC2Mod  带 bnet 前缀
+```
+
+两种都会出现。依赖**条数固定在偏移 44**（u32），串从 48 起、NUL 结尾。
+靠「第一个 `file:` 往前 4 字节」定位会读到 741947705 这种荒谬值。
+
+### G11. 交付物形态
+
+- 地图必须是**单文件 MPQ**（解开目录是编辑器开发形态）
+- 包布局 `Maps/Campaign/traynor01.SC2Map` + `Mods/<mod>/`，**文件名必须与战役任务名一致**（否则不覆盖）
+- `mods=` 只是标记必需，**不负责挂载**；依赖要么打进包，要么确认用户已装
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |

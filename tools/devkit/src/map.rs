@@ -1,7 +1,7 @@
 //! 读 `.SC2Mod` / `.SC2Map` 目录：里面有什么、关键文件在哪。
 //!
 //! 不解析内容——那是 `catalog` / `triggers` / `galaxy` 的事。
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 /// 往 `DocumentHeader` 里追加一条依赖。
@@ -17,12 +17,21 @@ use std::path::{Path, PathBuf};
 /// 所以加一条 = 计数 +1、在最后一条之后插入。
 /// 用「第一个 `file:` 的位置」来定位计数，不硬编码偏移。
 pub fn add_dependency(header: &[u8], dep: &str) -> Result<Vec<u8>> {
-    let first = header
-        .windows(5)
-        .position(|w| w == b"file:")
-        .context("DocumentHeader 里找不到 file: 依赖区")?;
-    let count_at = first.checked_sub(4).context("依赖计数位置异常")?;
+    // 依赖区固定在偏移 44：u32 条数，随后是 N 个 NUL 结尾的 UTF-8 串。
+    //
+    // **不能靠「第一个 file:」定位** —— 依赖串有两种写法：
+    //   file:Mods\X.SC2Mod
+    //   bnet:Liberty (Mod)/0.0/999,file:Mods/Liberty.SC2Mod
+    // 后者里的 file: 前面是 bnet 名字，往前 4 字节不是条数。
+    let count_at = 44usize;
+    if header.len() < 48 {
+        bail!("DocumentHeader 太短");
+    }
+    let first = 48usize;
     let count = u32::from_le_bytes(header[count_at..first].try_into().unwrap()) as usize;
+    if count > 256 {
+        bail!("依赖条数异常：{count}");
+    }
 
     // 依次跨过 count 条 NUL 结尾串，得到插入点。
     let mut at = first;
