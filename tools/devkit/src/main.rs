@@ -72,9 +72,12 @@ enum Cmd {
     /// 往某个触发器函数的动作段里插 Galaxy 代码（改了源不改产物等于没改）
     Inject {
         map: PathBuf,
-        /// 函数名，如 gt_Init01Technology_Func
+        /// 函数名，如 gt_Init01Technology_Func（插在动作段的 runActions 守卫之后）
         #[arg(long)]
-        r#fn: String,
+        r#fn: Option<String>,
+        /// 行锚点：插在第一处包含这段文字的行之后（缩进跟随锚点）。与 --fn 二选一
+        #[arg(long)]
+        after: Option<String>,
         /// 要插入的代码行，可给多个，按顺序插
         #[arg(long = "code", required = true)]
         code: Vec<String>,
@@ -333,7 +336,7 @@ fn main() -> Result<()> {
             std::fs::write(&out, &bytes)?;
             println!("wrote {}: {} 字节", out.display(), bytes.len());
         }
-        Cmd::Inject { map: mp, r#fn, code } => {
+        Cmd::Inject { map: mp, r#fn, after, code } => {
             let gal = ["MapScript.galaxy", "mapscript.galaxy"]
                 .iter()
                 .map(|n| mp.join(n))
@@ -341,12 +344,22 @@ fn main() -> Result<()> {
                 .context("这个目录里没有 MapScript.galaxy")?;
             let src = std::fs::read_to_string(&gal)?;
             let refs: Vec<&str> = code.iter().map(String::as_str).collect();
-            let (after, ok) = galaxy::inject_into_fn(&src, &r#fn, &refs);
+            let (out, ok, where_) = match (&r#fn, &after) {
+                (Some(f), None) => {
+                    let (o, k) = galaxy::inject_into_fn(&src, f, &refs);
+                    (o, k, format!("{f} 的动作段之后"))
+                }
+                (None, Some(a)) => {
+                    let (o, k) = galaxy::inject_after_line(&src, a, &refs);
+                    (o, k, format!("含「{a}」的行之后"))
+                }
+                _ => anyhow::bail!("--fn 与 --after 必须二选一"),
+            };
             if !ok {
-                anyhow::bail!("{} 里找不到 {} 的动作段，文件未改动", gal.display(), r#fn);
+                anyhow::bail!("{} 里找不到 {}，文件未改动", gal.display(), where_);
             }
-            std::fs::write(&gal, after)?;
-            println!("wrote {}: {} 行插进 {}", gal.display(), code.len(), r#fn);
+            std::fs::write(&gal, out)?;
+            println!("wrote {}: {} 行插在 {}", gal.display(), code.len(), where_);
         }
         Cmd::Unpack { file, out } => {
             let entries = mpq::read_entries(&file)?;

@@ -105,6 +105,30 @@ pub fn inject_into_fn(src: &str, fn_name: &str, code: &[&str]) -> (String, bool)
     (out, true)
 }
 
+/// 在**第一处包含 `anchor` 的行之后**插入几行，缩进跟随锚点行。
+///
+/// 给「往普通函数里插一段」用 —— 比如 `libCamp_gf_AddPlanet` 之后重设 Planet 字段。
+/// 比按函数名插更精确：普通函数没有 `runActions` 守卫可依。
+pub fn inject_after_line(src: &str, anchor: &str, code: &[&str]) -> (String, bool) {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let Some(at) = lines.iter().position(|l| l.contains(anchor)) else {
+        return (src.to_string(), false);
+    };
+    let indent: String = lines[at].chars().take_while(|c| c.is_whitespace()).collect();
+    let mut out = String::with_capacity(src.len() + code.len() * 40);
+    for (i, l) in lines.iter().enumerate() {
+        out.push_str(l);
+        if i == at {
+            for c in code {
+                out.push_str(&indent);
+                out.push_str(c);
+                out.push('\n');
+            }
+        }
+    }
+    (out, true)
+}
+
 /// 扫一个 .galaxy 文件里的 UnitCreate 调用。
 pub fn spawns(galaxy: &Path) -> Result<Vec<Spawn>> {
     let src = std::fs::read_to_string(galaxy)

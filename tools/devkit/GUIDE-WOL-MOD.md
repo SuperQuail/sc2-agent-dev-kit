@@ -125,75 +125,71 @@ sc2cat prune-locale <mod> --drop-prefix Conversation/ --drop-prefix Conversation
 
 裁掉 36,216 个键后恢复中文 ✓。**但哪些前缀算「战役专属」要判断，不能自动推。**
 
-## 8. 任务简报界面：**改不了**（如实说）
+## 8. 任务简报界面：改得动（**我最初的判断是错的**）
 
-你看到的「任务选择」界面右侧那个 3D 单位面板：
+### 8.1 先认错
 
-- 面板里的单位是 **`WarPig`**（WoL 战役里陆战队员的 id）——证据：`Button/Tooltip/WarPig=通用型步兵。` 与画面上那句一字不差 ✅
-- **那一屏的字符串不在任何地图里**：`tstory01`（休伯利安号）、`traynor01` 的本地化里都搜不到「通用型步兵」「任务选择」「可用科技」 ✅
-- 它们来自**战役包**（`Campaigns/Liberty.SC2Campaign`）✅
+我一开始断定面板单位是 `WarPig`，理由是 `Button/Tooltip/WarPig=通用型步兵。` 与画面一字不差。
+**这是巧合。** 复核后：
 
-**结论：交付一张地图改不到那一屏。** 可行路径只剩两条，都还没验证：
+| 键 | 真实值 | 对不对得上画面 |
+|---|---|---|
+| `Unit/Name/WarPig` | **战地豪猪** | ✗ 画面标题是「陆战队员」 |
+| `Button/Tooltip/WarPig` | 通用型步兵。**<n/><n/>可以对地和对空。** | ✗ 画面只有前半句 |
+| `Param/Value/lib_Camp_A8DF01B6` | **通用型步兵。** | ✅ 一字不差 |
 
-| 路径 | 代价 |
+**教训：字符串对上一半就下结论，是给自己挖坑。** 要找的是**唯一命中**，不是「像」。
+
+### 8.2 真实来源
+
+面板 = **PlanetPanel（星球面板）的「可用科技」区块**：
+
+| 元素 | 出处 |
 |---|---|
-| 用 mod 覆盖 `WarPig` 的 Actor/Model | **整场战役的陆战队员都会变** |
-| 用 mod 覆盖战役包里的任务/UI 数据 | 需要先定位到具体文件（`campaigndata.xml` 只有 55 字节，是空壳，任务定义不在那儿） |
+| 布局 | `mods/core.sc2mod/…/ui/layout/ui/planetpanel.sc2layout`（`TechnologyUnitModelFrame` / `TechnologyTextLabel` / `TechnologyDescriptionLabel`） |
+| 单位 id | `Campaigns/LibertyStory.SC2Campaign` 里 `campaignlib.galaxy:7438` 的 `lv_unitType = "Marine";` |
+| 填充 | `campaignlib.galaxy:6384` → `PlanetSetTechnologyUnitLink(PlanetLastCreated(), …)` |
 
-地图里的 `Briefing Scene 00/01` 触发器**不是那一屏**——它们是 `MovieStartRecording("Briefing_Video_TRaynor01_00")`，
-**把简报录制成影片**；玩家看到的是 CASC 里已渲染的 `briefing_video_traynor01_0{0,1,2}.ogv`。
+**注意包名**：是 **`LibertyStory.SC2Campaign`**，不是 `Liberty.SC2Campaign` ——
+`tstory01` 的 `DocumentHeader` 里有**第三条依赖**就是它。我之前只查了后者，所以什么都找不到。
 
-## 8. 任务简报界面：定位到一半（2026-10-17 追记）
+### 8.3 改法（局部，符合规则 R1）
 
-### 8.1 已经证实的
+在**承载任务选择屏的地图**（原版 `tstory01`）里，`AddPlanet` 之后重设那个 Planet 对象：
 
-| 结论 | 证据 |
-|---|---|
-| 面板里的单位是 `WarPig`（WoL 战役里陆战队员的 id） | 战役包写着 `Button/Tooltip/WarPig=通用型步兵。`，与画面一字不差 |
-| **不在任何地图的脚本里** | `tstory01` 的 galaxy 里 `WarPig` 出现 **0 次**；`traynor01` 也没有 |
-| **不在任何地图的 Objects 里** | `tstory01` 的 `Objects` 有 `Marine` / `SMMarine01` 等角色，**没有 `WarPig`** |
-| **不在战役 GameData 的配置里** | 战役根 GameData（110 文件 / 5.2 MB）里 `WarPig` 只出现在常规表（unit/actor/model/abil/requirement/upgrade） |
-| **不在战役的 layout 里** | 战役包只有 2 个 `.SC2Layout`：`wol_techtreepanel` / `descindex`，都不是 |
-| 地图里的 `Briefing Scene 00/01` **不是那一屏** | 它们是 `MovieStartRecording("Briefing_Video_TRaynor01_00")` —— 把简报**录制成影片**；玩家看到的是 CASC 里已渲染的 `.ogv` |
-
-### 8.2 还差最后一步
-
-**「`WarPig` 是怎么绑到那个面板上的」没查出来。**
-
-一个一次性定位实验（**还没做**）：
-
-```text
-做一个只改字符串、不改数据的 mod：
-  Unit/Name/WarPig   = 萨尔那加狂热者
-  Button/Tooltip/WarPig = <狂热者的说明>
-跟着包一起装，进「任务选择」界面看：
-  面板文字变了 → 绑定方式就是「按单位 id 取名字」，那换模型只需覆盖 WarPig 的 actor
-  没变         → 绑定在别处，得继续找
+```galaxy
+lv_planet = libCamp_gf_AddPlanet(lp_planetID);
+if ((lp_planetID == libCamp_ge_PlanetID_PlanetMarSara)) {
+    PlanetSetTechnologyUnitLink(lv_planet, "ZeratulZealot");
+    PlanetSetTechnologyName(lv_planet, UnitTypeGetName("ZeratulZealot"));
+    PlanetSetTechnologyText(lv_planet, StringExternal("Param/Value/你的文本键"));
+}
 ```
 
-### 8.3 为什么不能简单覆盖 `WarPig` 的 actor
+**三条必须一起设** —— 只改 link 会出现「模型是狂热者、标题还写陆战队员」。
 
-因为**整个战役的陆战队员都是 `WarPig`** —— 覆盖它 = 全战役陆战队员换外观，不只是那一屏。
-而 `tstory01` 是**独立地图**，它不会加载我们的 mod（mod 只被「依赖它的地图」加载）。
+```bash
+sc2cat inject tstory01.SC2Map \
+  --after 'lv_planet = libCamp_gf_AddPlanet(lp_planetID);' \
+  --code '…' --code '…'
+```
 
-**所以那一屏要改，大概率只能交一张改过的 `tstory01.SC2Map`** ——
-而它的面板单位不在脚本、不在 `Objects` 里，说明还得先搞清绑定方式。
+**为什么是局部的**：只写运行期 `PlanetCreate` 出来、随地图卸载消失的一个对象字段；
+**完全没碰 catalog** —— `Marine` 还是 `Marine`，战役里其他陆战队员、军械库、科技树都不变；
+其他地图加载时 `libCamp` 会重新写回 `Marine`，不外溢。
 
-### 8.4 这条路**没有可接受的验证方法**（结论）
+**被否决的三条**（都是全局）：
 
-定位「`WarPig` 怎么绑到面板上」最直接的办法是改两行字符串看它变不变。
-但那两行是**全局键** —— 会让**整场战役**的陆战队员改名。
+| 方案 | 为什么不行 |
+|---|---|
+| 改 `campaignlib.galaxy:7438` 的 `"Marine"` | 同一张 `tS_TechGroupUnitType` 表还喂 `PurchaseGroupSetUnitLink`（军械库/科技树/战报），全战役一起变 |
+| 覆盖 `Marine`/`WarPig` 等自带 id | 规则 R1 |
+| 改 `planetpanel.sc2layout` 模板 | 所有星球 + 所有战役共用 |
 
-**这不是可接受的代价。** 详见 `PITFALLS.md` 的 M 段硬规则：**改动的影响面必须等于需求的影响面。**
+### 8.4 待实测
 
-所以我**没有**交付那个探针包。基于现有证据，那一屏：
-
-- 面板单位是 `WarPig` ✅
-- 但 `WarPig` 与面板的**绑定方式**没查出来 ❌
-- 而**所有**能查出绑定方式的实验，都得动全局 id ❌
-
-**当前结论：在不动全局替换的前提下，那一屏改不了。**
-要突破，只能走静态分析（把战役包 / `tstory01` 的 UI 数据读透）—— 那是研究活，不是打包活。
+- 没跑游戏。方案已把调用放在**面板显示之前**，绕开「显示后能否即时刷新」的不确定性
+- 没验证萨尔那加狂热者的 actor 能否在 `UnitModelFrame` 里正常渲染（取决于它的模型/相机）
 
 ## 9. 交付前的自检
 
