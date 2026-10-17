@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
+use devkit::{catalog, deps, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -42,6 +42,17 @@ enum Cmd {
         original: PathBuf,
         /// 我们交付的拷贝
         ours: PathBuf,
+    },
+    /// 依赖冲突检查：展开整条依赖闭包，列出同一个 id 被谁定义了几次、谁赢
+    DepConflicts {
+        /// 地图目录（有 DocumentHeader 的那种）
+        map: PathBuf,
+        /// 依赖目录的搜索根，可给多个（包里的 Mods/、从 CASC 抽出来的目录…）
+        #[arg(long = "search", required = true)]
+        search: Vec<PathBuf>,
+        /// 只列这个前缀的表（如 C 只看 CUnit/CActorUnit…）；不给就全列
+        #[arg(long)]
+        kind: Option<String>,
     },
     /// 按给定顺序重写地图的依赖表（顺序有意义：后面的盖前面的）
     SetDeps {
@@ -240,6 +251,43 @@ fn main() -> Result<()> {
                 println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
             } else {
                 anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
+        }
+        Cmd::DepConflicts { map: mp, search, kind } => {
+            let (nodes, missing) = deps::closure(&mp, &search)?;
+            println!("依赖闭包 {} 个（优先级从低到高）:", nodes.len());
+            for (i, n) in nodes.iter().enumerate() {
+                println!("  {:>3}  {}", i + 1, n.dep);
+            }
+            for m in &missing {
+                println!("   ??  找不到: {m}");
+            }
+            let own = deps::owners(&nodes)?;
+            let mut hits = 0usize;
+            println!();
+            for ((k, id), who) in &own {
+                if who.len() < 2 {
+                    continue;
+                }
+                if let Some(f) = &kind {
+                    if !k.starts_with(f.as_str()) {
+                        continue;
+                    }
+                }
+                hits += 1;
+                let win = who.last().unwrap();
+                println!(
+                    "  {k} {id}  被 {} 个依赖定义 → 赢家是 #{} {}",
+                    who.len(),
+                    win + 1,
+                    nodes[*win].dep
+                );
+            }
+            println!();
+            if hits == 0 {
+                println!("没有发现同名 id 冲突");
+            } else {
+                println!("共 {hits} 处冲突。自制 mod 想赢就把自己排最后；想共存就改自己的 id");
             }
         }
         Cmd::SetDeps { map: mp, dep } => {

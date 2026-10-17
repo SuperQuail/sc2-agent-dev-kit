@@ -807,6 +807,56 @@ sc2cat set-deps <地图> --dep '...' --dep 'file:Mods\\kit_lotv_zeratul.SC2Mod'
 3. **保留中间产物**：那条阶梯之所以存在，只是因为我当时没删旧包。
    **每个交付版本留一份**，排查时就是现成的二分工具。
 
+## R. 依赖冲突检查：`kit_lotv_zeratul` 是**全面转换**，不是插件（2026-10-17）
+
+### R1. 工具
+
+```bash
+sc2cat dep-conflicts <地图目录> --search <依赖目录根> [--kind CUnit]
+```
+
+展开**完整依赖闭包**（含传递依赖，保持优先级顺序），统计每个 `(表, id)` 被谁定义了几次、
+**谁赢**（最后的最优先）。找不到的依赖会列出来 —— 闭包不完整时先补。
+
+### R2. 实测数据（自由日 + Liberty + LibertyStory + 蒙斯克 + 自制 mod + Void×2）
+
+```text
+依赖闭包 7 个 · 总冲突 9163 处
+赢家：#5 kit_lotv_zeratul 拿下 7321 处
+
+按表：CSound 3572 · CModel 555 · CUnit 477 · CConversation 255
+      CButton 235 · CActorUnit 176 · CUpgrade 175 · CRequirement 167 …
+```
+
+**`kit_lotv_zeratul` 不是「一个单位包」，它是把整个游戏重做了一遍。**
+连蒙斯克自己的 `CButton ArtilleryMengsk` / `CUnit ArmoryMengsk` 都被它盖掉。
+
+### R3. 所以「调顺序」和「改名字」都不是解
+
+| 方案 | 结果 |
+|---|---|
+| 自家 mod 排最后 | 模型对了 ✓，但**战役 F10 菜单没了**（235 个 `CButton` 被盖）、**合作技能没了**（它的旧 `CAbil*` 盖掉 StarCoop 的新版） |
+| 自家 mod 排前面 | 菜单和技能正常 ✓，但**单位外观变了** |
+| 重命名冲突 id | **9163 处** —— 不现实 |
+
+**⇒ 结论：这个 mod 不能和战役图混用。它是「底座」，不是「插件」。**
+
+### R4. 唯一可行的方向：**只抽需要的部分，做成独立带前缀的 mod**
+
+不要整个 mod 一起装，而是把它**某个单位及其所需的 catalog 闭包**抽出来，
+id 全部加前缀（如 `sqzZealot`），做成一个**几十个 id** 的小 mod。
+
+**判据**：`dep-conflicts` 在这个小 mod 上应该报 **0 处冲突**。
+它不是插件形态 —— 它和游戏自带的 id 完全没有交集。
+
+> 这正是我早期那个 8 MB 的 `zeratul-zealot-kit.SC2Mod` 干的事 —— 它当时是对的。
+> 后来我把它当成「垃圾残留」删掉，换成了完整 mod，问题就是从那里开始的。
+
+### R5. 附带确认：找不到依赖时工具会报
+
+第一次跑时闭包缺了 `Void.SC2Campaign` / `VoidStory.SC2Campaign`（自制 mod 自己的依赖），
+工具直接列了出来 —— 闭包不完整时的冲突统计**不可信**，必须先补齐。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |
