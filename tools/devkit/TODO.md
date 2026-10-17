@@ -25,7 +25,23 @@
 - 蒙斯克单位在 `Mods\StarCoop\Commanders\ArcturusMengsk.SC2Mod`，**本地 CASC 里就有**，64 个单位，不随包分发
 - 别被 `alliedcommanders.sc2mod`（纯文本壳，无 GameData）和 `liberty.sc2mod` 里的 `*ACGluescreenDummy`（UI 假单位）骗
 
-## T3. sc2cat 的已知缺口
+## T3. 规则 M 的机器化（「拒绝全局替换」怎么让工具拦）
+
+**目标**：`doctor` 能报出「本包**覆盖**了游戏自带的 id」——这是规则 M 唯一的保障。
+
+**卡在哪**：需要一个「游戏自带 id」的基线。
+
+**已排除的路**（记下来别再试）：
+- `StarCraftIIAgent/DataEditorXML/` 那 171 MB 是**编辑器用的 XML 模板**（含 `##id##` 占位符、`SMarker` 这类），**不是 id 清单**
+- 战役包 `base.sc2data/gamedata/` 只有战役自己的数据
+
+**可行方向**：
+1. 从 CASC 抽 `mods/liberty.sc2mod/base.sc2data/gamedata/unitdata.xml` 等基础表，生成一份**本地缓存**的 id 清单（不提交进 git，游戏内容）
+2. `doctor` 加一个可选参数指向这份清单；本包定义的 id 与清单求交集 → 非空就 **FAIL** 并列出
+
+**判据**：拿 `kit_lotv_zeratul.SC2Mod` 试应该**大量命中**（它本来就在覆盖）；拿我们自己造的东西试应该**零命中**。
+
+## T4. sc2cat 的已知缺口
 
 | # | 缺口 | 现在只能怎么绕 |
 |---|---|---|
@@ -35,7 +51,7 @@
 | 4 | `find-unit` 有「(无归属)」的引用 | grep 行号 + 手数触发器的元素边界 |
 | 5 | 组件的 `.version` 清单不会生成，只能删 | 删掉，靠游戏容忍 |
 
-## T4. 已知但按下不表的
+## T5. 已知但按下不表的
 
 - `normalize` 补齐的 12 个语系是**内容复制**，不是真翻译。要出多语言得逐份替换 —— 代码里已用 `shortcut:` 标注。
 - `package` 用平台自带的 `tar` 归档，**没在 Linux/macOS 上测过**。
