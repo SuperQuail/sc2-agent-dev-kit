@@ -143,6 +143,42 @@ sc2cat prune-locale <mod> --drop-prefix Conversation/ --drop-prefix Conversation
 地图里的 `Briefing Scene 00/01` 触发器**不是那一屏**——它们是 `MovieStartRecording("Briefing_Video_TRaynor01_00")`，
 **把简报录制成影片**；玩家看到的是 CASC 里已渲染的 `briefing_video_traynor01_0{0,1,2}.ogv`。
 
+## 8. 任务简报界面：定位到一半（2026-10-17 追记）
+
+### 8.1 已经证实的
+
+| 结论 | 证据 |
+|---|---|
+| 面板里的单位是 `WarPig`（WoL 战役里陆战队员的 id） | 战役包写着 `Button/Tooltip/WarPig=通用型步兵。`，与画面一字不差 |
+| **不在任何地图的脚本里** | `tstory01` 的 galaxy 里 `WarPig` 出现 **0 次**；`traynor01` 也没有 |
+| **不在任何地图的 Objects 里** | `tstory01` 的 `Objects` 有 `Marine` / `SMMarine01` 等角色，**没有 `WarPig`** |
+| **不在战役 GameData 的配置里** | 战役根 GameData（110 文件 / 5.2 MB）里 `WarPig` 只出现在常规表（unit/actor/model/abil/requirement/upgrade） |
+| **不在战役的 layout 里** | 战役包只有 2 个 `.SC2Layout`：`wol_techtreepanel` / `descindex`，都不是 |
+| 地图里的 `Briefing Scene 00/01` **不是那一屏** | 它们是 `MovieStartRecording("Briefing_Video_TRaynor01_00")` —— 把简报**录制成影片**；玩家看到的是 CASC 里已渲染的 `.ogv` |
+
+### 8.2 还差最后一步
+
+**「`WarPig` 是怎么绑到那个面板上的」没查出来。**
+
+一个一次性定位实验（**还没做**）：
+
+```text
+做一个只改字符串、不改数据的 mod：
+  Unit/Name/WarPig   = 萨尔那加狂热者
+  Button/Tooltip/WarPig = <狂热者的说明>
+跟着包一起装，进「任务选择」界面看：
+  面板文字变了 → 绑定方式就是「按单位 id 取名字」，那换模型只需覆盖 WarPig 的 actor
+  没变         → 绑定在别处，得继续找
+```
+
+### 8.3 为什么不能简单覆盖 `WarPig` 的 actor
+
+因为**整个战役的陆战队员都是 `WarPig`** —— 覆盖它 = 全战役陆战队员换外观，不只是那一屏。
+而 `tstory01` 是**独立地图**，它不会加载我们的 mod（mod 只被「依赖它的地图」加载）。
+
+**所以那一屏要改，大概率只能交一张改过的 `tstory01.SC2Map`** ——
+而它的面板单位不在脚本、不在 `Objects` 里，说明还得先搞清绑定方式。
+
 ## 9. 交付前的自检
 
 `sc2cat doctor <zip 或目录>` 查五件事：
