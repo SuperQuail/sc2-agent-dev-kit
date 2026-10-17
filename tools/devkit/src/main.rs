@@ -43,6 +43,13 @@ enum Cmd {
         /// 我们交付的拷贝
         ours: PathBuf,
     },
+    /// 按给定顺序重写地图的依赖表（顺序有意义：后面的盖前面的）
+    SetDeps {
+        map: PathBuf,
+        /// 按**期望顺序**给全，如 --dep 'file:Mods\\X.SC2Mod'。不给就只打印现有顺序
+        #[arg(long = "dep")]
+        dep: Vec<String>,
+    },
     /// 交付物自检：这一条命令回答「这个包是不是半成品」
     Doctor { pkg: PathBuf },
     /// 把 Maps/ + Mods/ 目录装成启动器能导入的 zip（补 metadata.json）
@@ -233,6 +240,26 @@ fn main() -> Result<()> {
                 println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
             } else {
                 anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
+        }
+        Cmd::SetDeps { map: mp, dep } => {
+            let hdr = ["DocumentHeader", "documentheader"]
+                .iter()
+                .map(|n| mp.join(n))
+                .find(|p| p.is_file())
+                .context("这个目录里没有 DocumentHeader")?;
+            let before = std::fs::read(&hdr)?;
+            if dep.is_empty() {
+                for (i, d) in map::read_dependencies(&before)?.iter().enumerate() {
+                    println!("{:>3}  {d}", i + 1);
+                }
+            } else {
+                let after = map::set_dependencies(&before, &dep)?;
+                std::fs::write(&hdr, after)?;
+                println!("wrote {}: {} 条依赖", hdr.display(), dep.len());
+                for (i, d) in dep.iter().enumerate() {
+                    println!("{:>3}  {d}", i + 1);
+                }
             }
         }
         Cmd::Doctor { pkg } => {

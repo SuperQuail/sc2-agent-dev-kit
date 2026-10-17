@@ -50,6 +50,59 @@ pub fn add_dependency(header: &[u8], dep: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// 按给定顺序**重建**依赖表（覆盖增/删/重排三件事）。
+///
+/// **顺序有意义**：依赖表是有序的，**后面的盖前面的**。
+/// 实测踩过：把合作指挥官 mod 追加在自制 mod **后面**，它带进来的基础数据
+/// 盖掉了自制 mod 的 actor 定义，单位外观直接变了。
+pub fn set_dependencies(header: &[u8], deps: &[String]) -> Result<Vec<u8>> {
+    if deps.len() > 256 {
+        bail!("依赖太多：{}", deps.len());
+    }
+    let count_at = 44usize;
+    if header.len() < 48 {
+        bail!("DocumentHeader 太短");
+    }
+    let first = 48usize;
+    let old = u32::from_le_bytes(header[count_at..first].try_into().unwrap()) as usize;
+    if old > 256 {
+        bail!("依赖条数异常：{old}");
+    }
+    let mut at = first;
+    for _ in 0..old {
+        let end = header[at..].iter().position(|&c| c == 0).context("依赖串未以 NUL 结尾")? + at;
+        at = end + 1;
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&header[..count_at]);
+    out.extend_from_slice(&(deps.len() as u32).to_le_bytes());
+    for d in deps {
+        out.extend_from_slice(d.as_bytes());
+        out.push(0);
+    }
+    out.extend_from_slice(&header[at..]);
+    Ok(out)
+}
+
+/// 读出现有的依赖列表（按顺序）。
+pub fn read_dependencies(header: &[u8]) -> Result<Vec<String>> {
+    if header.len() < 48 {
+        bail!("DocumentHeader 太短");
+    }
+    let count = u32::from_le_bytes(header[44..48].try_into().unwrap()) as usize;
+    if count > 256 {
+        bail!("依赖条数异常：{count}");
+    }
+    let mut out = Vec::new();
+    let mut at = 48usize;
+    for _ in 0..count {
+        let end = header[at..].iter().position(|&c| c == 0).context("依赖串未以 NUL 结尾")? + at;
+        out.push(String::from_utf8_lossy(&header[at..end]).to_string());
+        at = end + 1;
+    }
+    Ok(out)
+}
+
 /// 一个模块目录（.SC2Mod 或 .SC2Map）里值得关心的东西。
 #[derive(Debug, Clone)]
 pub struct Layout {
