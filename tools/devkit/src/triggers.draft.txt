@@ -1,0 +1,94 @@
+//! 在 `Triggers`（XML）里定位可以精确替换的单位引用。
+//!
+//! 实测形态：
+//! ````text
+//! <Element Type="Param" Id="4A9B7C33">
+//!     <ParameterDef Type="ParamDef" Library="Ntve" Id="00000691"/>
+//!     <Value>Zergling</Value>
+//!     <ValueType Type="gamelink"/>
+//!     <ValueGameType Type="Unit"/>
+//! </Element>
+//! ````
+//! 只有 `ValueGameType` 为 `Unit` 的那个 `<Value>` 才是单位引用；其余 `<Value>` 是数字、
+//! 字符串或别的 gamelink 类型。只改这类 `<Value>` 里的文本，其余一字不动。
+//!
+//! 为什么手写扫描而不用 quick-xml：这里要的是**字节范围**，而 XML 解析器只给行号列号，
+//! 换算回字节偏移要把缩进和实体都算一遍，既慢又容易错。手写扫描逐字节走，看到的偏移量
+//! 就是原文偏移量，不需要任何回推。
+use anyhow::Result;
+
+/// 一处「单位引用」以及 `<Value>` **内容**在原文中的字节范围。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitValue {
+    pub value: String,
+    /// `<Value>` 开标签之后的第一个字节
+    pub start: usize,
+    /// `</Value>` 开标签之前的最后一个字节 + 1
+    pub end: usize,
+    pub line: usize,
+}
+
+/// 找出全部 `ValueGameType = Unit` 的 `<Value>`。
+pub fn unit_values(xml: &str) -> Result<Vec<UnitValue>> {
+    let s = xml.as_bytes();
+    let mut out: Vec<UnitValue> = Vec::new();
+    // 未闭合的开标签：名字 + 该元素的字节起点（不是 Value 的也要压，才能正确配对结尾）。
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    let mut i = 0usize;
+    // 行号只在这里数，扫描是单向的，所以整体只过一遍原文。
+    let mut line = 1usize;
+
+    while i < s.len() {
+        if s[i] != b'<' {
+            if s[i] == b'\n' {
+                line += 1;
+            }
+            i += 1;
+            continue;
+        }
+        let Some(rel) = s[i + 1..].iter().position(|&c| c == b'>') else { break };
+        let gt = i + 1 + rel;
+        let raw = &s[i + 1..gt];
+        let closing = raw.first() == Some(&b'/');
+        // 结尾是 '/' 说明自闭合（属性里可能带 '/' 或 '>'，但引号内不会有裸 '/' 结尾）。
+        let empty = raw.last() == Some(&b'/');
+        let body = if closing {
+            &xml[i + 2..gt]
+        } else {
+            &xml[i + 1..gt]
+        };
+        let (name, attrs) = split_name(body);
+
+        if closing {
+            // 找到同名开标签；找不到就当前面是文本，忽略。
+            if let Some(at) = stack.iter().rposition(|(n, _)| n == name) {
+                while let Some((n, st)) = stack.pop() {
+                    if n == "Value" {
+                        let end = i;
+                        out.push(UnitValue { value: xml[st..end].to_string(), start: st, end, line: 0 });
+                    }
+                    if stack.len() == at {
+                        break;
+                    }
+                }
+            }
+        } else if !empty {
+            stack.push((name.to_string(), gt + 1));
+        } else if name == "ValueGameType" {
+            // 自闭合的 ValueGameType 是 Param 的直接子元素，紧跟在本段的 </Value> 之后出栈。
+            if attr(attrs, "Type").as_deref() == Some("Unit") {
+                if let Some(unit) = out.last_mut() {
+                    if unit.line == 0 && !unit.value.is_empty() {
+                        unit.line = line_for(xml, unit.start);
+                    }
+                }
+            }
+        }
+        // 行号：只数到标签结束为止的换行。
+        line += s[i..=gt].iter().filter(|&&c| c == b'\n').count();
+        i = gt + 1;
+    }
+
+    // 文件末尾还开着的 Value 也算（不静默丢），但只有确认过 Unit 的才留。
+    Ok(out.into_iter().filter(|v| v.line > 0).collect())
+}

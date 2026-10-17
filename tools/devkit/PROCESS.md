@@ -87,6 +87,64 @@ sc2cat find  <root> <id>       按 id 找 catalog 行（可 --type 过滤）
    导致修复看起来「没生效」。**每次改完要 `cargo build --release` 再验收。**
 
 ---
+**W2 完成 + W3/W4 关键设计确认（2026-10-17）**
+
+### 读哪里：Galaxy 而不是触发器图
+
+`Triggers` 是**编译后的图**：`<FunctionCall Id="C03DAB8C"/>` 只是引用，真正身份是
+`<FunctionDef Library="Ntve" Id="00000056"/>`——**没有可读名字**。直接解析它找「生成谁」成本很高。
+
+而生成的 `MapScript.galaxy` 完全可读：
+
+```galaxy
+UnitCreate(8, "Zergling", 0, gv_pLAYER_07_ZERG_CINE, RegionRandomPoint(RegionFromId(29)), 30.0);
+```
+
+**单位是字面量字符串，玩家变量也可读。** 所以：**用 Galaxy 找，不用 Galaxy 改。**
+（改它会被编辑器覆盖——见 `skills/sc2-map-triggers` 的红线。）
+
+### 改哪里：Triggers 里的 Param 字面量
+
+Triggers 里单位 id **是字面量**，形态固定：
+
+```xml
+<Element Type="Param" Id="4A9B7C33">
+    <ParameterDef Type="ParamDef" Library="Ntve" Id="00000691"/>
+    <Value>Zergling</Value>
+    <ValueType Type="gamelink"/>
+    <ValueGameType Type="Unit"/>
+</Element>
+```
+
+**只有 `ValueGameType` 为 `Unit` 的 `<Value>` 才是单位引用。** 替换只改 `<Value>` 的文本，
+按字节范围拼接，其余一字不动。
+
+### 因此 W3/W4 重新定义
+
+| 期 | 原定 | 改为 |
+|---|---|---|
+| W2 | 读 `.SC2Map` 结构 | ✅ 完成：`sc2cat layout` |
+| W3 | 扫 Triggers 找生成点 | **改为扫 `MapScript.galaxy`**：`sc2cat spawns` |
+| W4 | 生成补丁给人粘贴 | **改为直接精确替换**：`sc2cat set-unit`（符合「全程 CLI」纪律） |
+
+### 新增命令
+
+```text
+sc2cat layout   <dir>                              看 .SC2Map/.SC2Mod 里有什么
+sc2cat spawns   <map>                              列 UnitCreate 生成点（读 MapScript.galaxy）
+sc2cat find-unit <map> <unit>                      列 Triggers 里的单位引用（只读）
+sc2cat set-unit <map> --from A --to B [--dry-run]  精确替换，只改 <Value> 文本
+```
+
+### 参考素材（仓库外）
+
+```text
+sc2agent-records/benchmark/refs/kit_lotv_zeratul.SC2Mod/   65 文件 29.9 MB，含 ZeratulZealot
+sc2agent-records/benchmark/refs/paiur01.SC2Map/            18 文件，含 Triggers 2.5 MB
+sc2agent-records/benchmark/work/accept-01.ps1              人工验收脚本
+```
+
+---
 ## 2. 每期的完成定义（Definition of Done）
 
 | # | 要求 | 怎么证明 |
