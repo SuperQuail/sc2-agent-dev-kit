@@ -183,17 +183,27 @@ pub fn prune(root: &Path, drop_prefixes: &[String]) -> Result<String> {
 
 /// 就地设置若干本地化键：命中已有键就**替换**（不是追加 —— 追加时先出现的旧值会赢），
 /// 没有就追加。写回时保留原文件的 BOM。
+///
+/// **两张表都写**：`Unit/Name/*` 与 `Button/Tooltip/*` 在 `GameStrings`，编辑器导出的对象名
+/// 却常在 `ObjectStrings` —— 分不清该进哪张时，两边都放一份最省事（重复无害）。
 pub fn set_keys(root: &Path, locale: &str, pairs: &[(String, String)]) -> Result<String> {
     let dir = root.join(format!("{locale}.SC2Data")).join("LocalizedData");
     std::fs::create_dir_all(&dir)?;
-    let file = dir.join("ObjectStrings.txt");
-    let raw = std::fs::read(&file).unwrap_or_default();
+    let mut notes = Vec::new();
+    for name in ["ObjectStrings.txt", "GameStrings.txt"] {
+        let (replaced, added) = set_keys_in(&dir.join(name), pairs)?;
+        notes.push(format!("{name}: 替换 {replaced}, 新增 {added}"));
+    }
+    Ok(format!("{locale} → {}", notes.join(" | ")))
+}
+
+fn set_keys_in(file: &Path, pairs: &[(String, String)]) -> Result<(usize, usize)> {
+    let raw = std::fs::read(file).unwrap_or_default();
     let bom = raw.starts_with(BOM);
     let text = String::from_utf8_lossy(raw.strip_prefix(BOM).unwrap_or(&raw)).to_string();
 
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut replaced = 0usize;
-    let mut added = 0usize;
+    let (mut replaced, mut added) = (0usize, 0usize);
     for (k, v) in pairs {
         match lines.iter_mut().find(|l| l.split('=').next() == Some(k.as_str())) {
             Some(l) => {
@@ -212,6 +222,6 @@ pub fn set_keys(root: &Path, locale: &str, pairs: &[(String, String)]) -> Result
     }
     out.extend_from_slice(lines.join("\n").as_bytes());
     out.push(b'\n');
-    std::fs::write(&file, out)?;
-    Ok(format!("{}: 替换 {} 条, 新增 {} 条", file.display(), replaced, added))
+    std::fs::write(file, out)?;
+    Ok((replaced, added))
 }
