@@ -37,7 +37,7 @@
 
 | 周 | 做什么 | 验收（可自己敲） | 阻塞 |
 |---|---|---|---|
-| **W1** | `.SC2Mod` 读取器：`ComponentList` / `DocumentHeader` / GameData 全扫描建索引 | 对 `泽拉图之遗` 打印出 `ZeratulZealot` 及其整条链（Weapon/Actor/Button/Effect） | 无 |
+| **W1** ✅ | `.SC2Mod` 读取器：全树扫描建 `(类型, id) → 文件` 索引 | `sc2cat find <mod> ZeratulZealot` 命中 1 条 `CUnit` | 无 |
 | **W2** | `.SC2Map` 读取器：目录结构 / `Triggers` XML / 地图本地 GameData | 对 `paiur01.SC2Map` 打印文件结构与触发器树 | 无 |
 | **W3** | 触发器扫描：列出单位生成点（动作 / 单位 ID / 玩家） | 对 `paiur01` 列出全部生成调用 | 无 |
 | **W4** | 补丁生成器：替换单位 ID + 生成 catalog 覆盖行 | 对 `paiur01` 输出可直接粘贴的补丁 | 无 |
@@ -59,6 +59,32 @@ W1–W4     ★ 新增：第三方 mod / 地图 / 触发器 / 补丁生成
 
 原计划的第 1、2、9 期与 W 系列**无冲突**，可以并行。
 但 DESIGN §10 已按 W1 的实测结论修正：**读用扫描索引，不用类型→文件映射**。
+
+---
+### 施工日志
+
+**W1 完成（2026-10-17）**
+
+```text
+sc2cat types <root>            列类型统计
+sc2cat find  <root> <id>       按 id 找 catalog 行（可 --type 过滤）
+```
+
+实现要点与实测：
+
+| 项 | 值 |
+|---|---|
+| 扫描方式 | 遍历所有 `*.xml`，**看根元素是不是 `<Catalog>`**，不假设文件名 |
+| 对 `泽拉图之遗` | 45,706 条 catalog 行 / 240 种类型，**0.11 秒** |
+| 独立对账 | 与 Python `ElementTree` 计数**逐文件一致**（`AbilData.xml` 1096 = 1096） |
+| 测试 | 5 个单元测试（自闭合行、非 Catalog 根、空 Catalog、注释、随意命名文件） |
+
+**开发中抓到的两个真 bug**（都是测试/对账抓的，不是猜的）：
+
+1. **自闭合行被漏掉**——`<CUnit id="X"/>` 走的是 `Event::Empty` 而非 `Start`，第一版只处理了 `Start`。
+   这个 bug 让统计少了 92%（3646 vs 45706）。
+2. **改了代码没重编二进制**——`cargo test` 只更新测试二进制，`sc2cat.exe` 还是旧的，
+   导致修复看起来「没生效」。**每次改完要 `cargo build --release` 再验收。**
 
 ---
 ## 2. 每期的完成定义（Definition of Done）

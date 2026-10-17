@@ -9,6 +9,7 @@ build/
 
 # Rust 构建产物（约 2 GB，cargo build --release 重建）
 installer/src-tauri/target/
+tools/devkit/target/
 
 # 前端的依赖与构建产物
 # node_modules 由 pnpm install 重建；dist 是构建产物，发布时打进二进制。
