@@ -1027,6 +1027,67 @@ DefaultButtonFace="ResearchX"   前面是字母   → 不改（那是另一个 i
 只处理其中一种，剩下的就是静默断链。工具必须**把边的写法列全并逐个覆盖**，
 再用**独立的检查**确认没有残留 —— 两边都做完才算完成。
 
+## V. 引用写法的完整清单（子 agent 实测，2026-10-18）
+
+### V1. 改名要覆盖的**六类**引用写法
+
+那 9 个 id 改名后，`fix9` 里仍有 **70 处**旧 id 存活。逐类：
+
+| # | 写法 | 处数 | 漏了会怎样 |
+|---|---|---|---|
+| 1 | `AbilCmd="ID,Command"` | 1 | **命令卡按钮消失**（就是「虚空飓风」没了） |
+| 2 | `Terms="Kind.ID.Event"` | 8 | actor 事件不触发 |
+| 3 | Triggers 里**不带引号**的 `<Value>ID</Value>` | 10 | 地图触发器指向别人的单位 |
+| 4 | `Reference="Table,ID,Field"` | 11 | 图标/字段引用断 |
+| 5 | 本地化值里的 `<d ref="Table,ID,Field"/>` | 19 | 技能数值引用断 |
+| 6 | `PreloadAssetDB.txt` 的 `id=` 键 | 21 | 预载失效 |
+
+另有：`PreloadAssetDB` 的逗号列表（`Unit=`/`Effect=`/`Model=`/`Button=`）、
+本地化键 `ID\Field=`（反斜杠两段）、`Table/ID` 全限定、`UserData` 的 `GameLink=`。
+
+**`fix9` 是旧产物**；用「标识符边界」规则重做的 `v2` **这六类全部覆盖**（两套独立检查都为 0）。
+
+### V2. 裸「全 token 替换」**不能**用
+
+反例：`DocumentInfo` 的
+`<Value>bnet:Void (Campaign)/0.0/999,file:Campaigns/Void.SC2Campaign</Value>`
+和 Triggers 的 `<Value>ID</Value>` **形状完全一样**，但**绝对不能动**。
+
+⇒ 必须**按上下文分类**替换，并维护一份**拒绝改写名单**
+（`DocumentInfo`/`DocumentHeader`、asset 路径、`index=`、`##macro##`、Bank 名、Triggers 的 `Id=`/`Library=`）。
+
+### V3. 引用完整性检查：**守恒**比「悬空」管用
+
+- 裸「引号里的都是引用」→ **1,698,760** 个候选（就是 S2 第 1 条那个坑）；加学习门槛后降到 4335
+- 纯「悬空判定」**报不出**这次的 bug：改名后 `ZeratulZealotWhirlwind` 仍被 StarCoop 定义着
+- **真正管用的是引用数守恒**：`after_old == 0` 且 `after_new >= before_old`
+  —— **不依赖闭包是否完整**。
+
+```text
+实测对 9 个 id 全部报 BROKEN（如 ZeratulZealot before=73 afterOld=22 afterNew=78）
+一网打尽 70 处泄漏。
+```
+
+### V4. devkit 两个实测 bug（已修一个）
+
+| Bug | 影响 | 状态 |
+|---|---|---|
+| `closure.rs` 自己拼 `<{kind} id="{id}"`，要求 id 是**第一个**属性 | kit 里 **92 条** `id=` 非首位的定义被整个跳过 → 链路不全 | ✅ 已修（逐个候选取表名匹配的那处） |
+| `rename.rs` 不懂复合值，而 `closure.rs` 早就 `split(',')` | 分析器懂、改写器不懂 → 直接导致 70 处泄漏 | ✅ 已修（改成标识符边界规则） |
+
+### V5. 映射表：加依赖不用重推链路
+
+`research_rename/rename_map.tsv` —— 一行一个 id：`old_id / new_id / table / dependency / status`。
+**加新依赖 = 加行 + apply + check**，不用重推整改链路。
+`dependency` 列是审计线索（这处改名是为了躲谁），`status` 列可批量重跑 `todo` 行。
+
+### V6. 全量重命名 9163：**原位不可行**（维持 R4）
+
+卡点不是数量，是非 catalog 耦合面：`PreloadAssetDB.txt`（按 id 建索引）、`Preload.xml`、
+`Assets/`（135 dds / 39 m3 / 5 tga）、`UI/*.SC2Layout`（31 个）、`DocumentInfo`、`BankList.xml`。
+
+**⇒ 只抽几十个 id 做成独立带前缀的包**，不要原位改 9163。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |

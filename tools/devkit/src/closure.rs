@@ -25,8 +25,27 @@ fn bodies(root: &Path) -> Result<Vec<(String, String, std::path::PathBuf, String
     for f in catalog::xml_files(root) {
         let text = std::fs::read_to_string(&f).unwrap_or_default();
         for e in catalog::entries_in(&f).unwrap_or_default() {
-            let open = format!("<{} id=\"{}\"", e.kind, e.id);
-            let Some(a) = text.find(&open) else { continue };
+            // 不能拼 `<{kind} id="{id}"` —— 那样要求 id 是**第一个**属性，
+            // 而 kit 里有 92 条是 `<CAbilMorph default="1" id="SIBuildingUproot">` 这种写法，
+            // 全部被跳过 → 它们发出的引用对链路完全不可见。
+            // 改成：先找 `id="{id}"`，再往回想找到外层标签的 `<`。
+            // 同一个 id 在多张表里都有（`ZeratulZealot` 既是 CUnit 又是 CActorUnit），
+            // 所以要**逐个候选**试，挑表名对得上的那一个 —— 只找第一处会把两张表全跳过。
+            let needle = format!("id=\"{}\"", e.id);
+            let want = format!("<{}", e.kind);
+            let mut from = 0usize;
+            let mut found = None;
+            while let Some(rel) = text[from..].find(&needle) {
+                let hit = from + rel;
+                if let Some(a) = text[..hit].rfind('<') {
+                    if text[a..].starts_with(&want) {
+                        found = Some(a);
+                        break;
+                    }
+                }
+                from = hit + needle.len();
+            }
+            let Some(a) = found else { continue };
             let tail = &text[a..];
             let close = format!("</{}>", e.kind);
             let body = match tail.find(&close) {
