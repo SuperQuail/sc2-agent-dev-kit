@@ -99,6 +99,49 @@ python tools/build-updater-exe.py          # 给新手构建单文件更新器 e
 更新器**只增改、从不删除**，也不碰 `agent-config.json` 等同机专属文件；备份留在
 `.sc2-update-backup/`，用 `update.py --list-backups` 查看。
 
+## 依赖冲突与改名解耦
+
+**地图的依赖表是有序的，后面的盖前面的。** 给地图加一个外部 mod，很可能把它整条依赖链拉进来，
+其中某个 mod 会用**同名 id** 盖掉我们自己的数据 —— 文件一个字节没改，单位外观/技能/菜单却变了。
+
+```bash
+sc2cat dep-conflicts <地图目录> --search <依赖根>        # 整条闭包的同名 id 冲突，谁赢
+sc2cat unit-closure <地图> --search <根> --unit <id> --within <自制mod>   # 只看一个单位的链路
+```
+
+### 改名映射表存在**工作目录**
+
+```text
+./sc2cat-rename-map.tsv          ← 就在当前工作目录，跟着项目提交
+old_id  new_id  table  dependency  status
+```
+
+**用 CLI 维护，不要手工编辑**（手工编辑容易漏列、格式漂移）：
+
+```bash
+sc2cat rename-map --add 旧id=新id --table CUnit --why StarCoop.SC2Mod   # 加一行（落在工作目录）
+sc2cat rename-map                                                       # 列出全部
+sc2cat rename-id <自制mod> <地图…> --pair 旧id=新id                      # 执行改名
+sc2cat ref-check --baseline <原始> --current <改后>                      # 引用守恒检查
+```
+
+**`dependency` 列是审计线索**（这处改名是为了躲谁）；**`status` 列** `done`/`todo` 可批量重跑。
+**加新依赖 = 加行 + apply + check**，不用重推整改链路。
+
+### 硬判据：引用守恒
+
+```text
+after_old == 0        旧 id 一个都不剩
+after_new >= before   新 id 的数量不少于原来
+```
+
+**为什么不是「悬空引用」**：改名后旧 id 往往**仍然被别人定义**着，悬空检查报不出来。
+守恒判据**不依赖闭包是否完整**，是唯一实测管用的。
+
+> 改名要覆盖**六类**写法：`AbilCmd="ID,Cmd"` · `Terms="Kind.ID.Event"` · Triggers 的 `<Value>ID</Value>` ·
+> `Reference="Table,ID,Field"` · 本地化 `<d ref="Table,ID,Field"/>` · `PreloadAssetDB.txt` 的 `id=` 键。
+> 具体见 `tools/devkit/PITFALLS.md` 的 V 段。
+
 ## 需要人工的编辑器操作
 
 以下智能体做不了，需要用户操作：打开/保存 Blizzard 地图（需账号登录）、地形与区域、doodads 与寻路、过场动画、把模组/地图另存为 Components。

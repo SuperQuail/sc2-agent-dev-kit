@@ -10,4 +10,5 @@ pub mod locale;
 pub mod map;
 pub mod mpq;
 pub mod rename;
+pub mod renamemap;
 pub mod triggers;

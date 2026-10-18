@@ -1,0 +1,12 @@
+# sc2cat 改名映射表 —— 一行一个 id。加新依赖 = 加行 + apply + check，不用重推链路。
+# dependency 列是审计线索（这处改名是为了躲谁）；status 列 done/todo 可批量重跑。
+old_id	new_id	table	dependency	status
+ZeratulZealotWhirlwind	sqzZeratulZealotWhirlwind	CAbilEffectInstant	StarCoop.SC2Mod	done
+ZeratulZealotBlinkHeal	sqzZeratulZealotBlinkHeal	CUpgrade	StarCoop.SC2Mod	done
+ZeratulZealotBlinkStun	sqzZeratulZealotBlinkStun	CBehaviorBuff	StarCoop.SC2Mod	done
+ZeratulZealotBlinkOut	sqzZeratulZealotBlinkOut	CActorModel	StarCoop.SC2Mod	done
+ZeratulZealotBlinkSet	sqzZeratulZealotBlinkSet	CEffectSet	StarCoop.SC2Mod	done
+ZeratulZealotAttack	sqzZeratulZealotAttack	CActorAction	StarCoop.SC2Mod	done
+ZeratulZealotBlink	sqzZeratulZealotBlink	CAbilEffectInstant	StarCoop.SC2Mod	done
+ZeratulZealot	sqzZeratulZealot	CUnit+CActorUnit	StarCoop.SC2Mod	done
+ZealotZeratul	sqzZealotZeratul	CButton	StarCoop.SC2Mod	done

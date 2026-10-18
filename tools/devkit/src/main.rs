@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, closure, deps, doctor, drift, edit, galaxy, locale, map, mpq, rename, triggers};
+use devkit::{catalog, closure, deps, doctor, drift, edit, galaxy, locale, map, mpq, rename, renamemap, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -42,6 +42,32 @@ enum Cmd {
         original: PathBuf,
         /// 我们交付的拷贝
         ours: PathBuf,
+    },
+    /// 改名映射表：默认列在**工作目录**的 sc2cat-rename-map.tsv。加 --add 加一行
+    RenameMap {
+        /// 映射表路径，默认 ./sc2cat-rename-map.tsv
+        #[arg(long)]
+        map: Option<PathBuf>,
+        /// 新增一行，形如 旧id=新id
+        #[arg(long)]
+        add: Option<String>,
+        /// 这一行的表名（如 CUnit+CActorUnit）
+        #[arg(long)]
+        table: Option<String>,
+        /// 这处改名是为了躲哪个依赖（审计线索）
+        #[arg(long)]
+        why: Option<String>,
+    },
+    /// 引用守恒检查：旧 id 一个都不剩、新 id 不少于原来
+    RefCheck {
+        /// 改动**前**的树（基线），可给多个
+        #[arg(long = "baseline", required = true)]
+        baseline: Vec<PathBuf>,
+        /// 改动**后**的树，可给多个
+        #[arg(long = "current", required = true)]
+        current: Vec<PathBuf>,
+        #[arg(long)]
+        map: Option<PathBuf>,
     },
     /// 把 catalog id 改名（连同引用），让两套数据共存而不是抢优先级
     RenameId {
@@ -272,6 +298,50 @@ fn main() -> Result<()> {
                 println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
             } else {
                 anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
+        }
+        Cmd::RenameMap { map, add, table, why } => {
+            let path = map.unwrap_or_else(|| PathBuf::from(renamemap::MAP_FILE));
+            let mut m = renamemap::Map::load(&path)?;
+            if let Some(a) = add {
+                let (from, to) = a.split_once('=').context("--add 要写成 旧id=新id")?;
+                let is_new = m.upsert(renamemap::Row {
+                    old_id: from.to_string(),
+                    new_id: to.to_string(),
+                    table: table.unwrap_or_default(),
+                    dependency: why.unwrap_or_default(),
+                    status: "todo".to_string(),
+                });
+                m.save()?;
+                println!("{} {} → {}（{}）", if is_new { "新增" } else { "更新" }, from, to, path.display());
+            } else {
+                println!("{}：{} 行（done {} / todo {}）", path.display(), m.rows.len(), m.done().len(), m.todo().len());
+                for r in &m.rows {
+                    println!(
+                        "  {:<34} → {:<34} {:<18} 躲:{:<22} {}",
+                        r.old_id, r.new_id, r.table, r.dependency, r.status
+                    );
+                }
+            }
+        }
+        Cmd::RefCheck { baseline, current, map } => {
+            let path = map.unwrap_or_else(|| PathBuf::from(renamemap::MAP_FILE));
+            let m = renamemap::Map::load(&path)?;
+            let vs = renamemap::check(&m, &baseline, &current);
+            println!("{:<36} {:>7} {:>9} {:>9}  判定", "id", "改前", "旧id残留", "新id");
+            let mut bad = 0usize;
+            for v in &vs {
+                let verdict = if v.ok() { "OK" } else { bad += 1; "BROKEN" };
+                println!(
+                    "{:<36} {:>7} {:>9} {:>9}  {}",
+                    v.old_id, v.before, v.after_old, v.after_new, verdict
+                );
+            }
+            println!();
+            if bad == 0 {
+                println!("守恒: PASS（{} 个 id）", vs.len());
+            } else {
+                anyhow::bail!("守恒: FAIL —— {bad} 个 id 有残留或新引用不足");
             }
         }
         Cmd::RenameId { roots, pair } => {
