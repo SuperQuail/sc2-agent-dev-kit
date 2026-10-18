@@ -912,6 +912,74 @@ zealotdreads_diffuse2.dds 1 个包: liberty.sc2mod
 **没有第三个解释前不要动手改。** 下一步该做的是把两个顺序下的
 **实际生效数据**摊开对比（需要游戏内或编辑器侧的证据），而不是继续猜。
 
+## T. 定位成功 + 重命名解耦（2026-10-17/18）
+
+### T1. 二分结果：元凶是 `StarCoop.SC2Mod`
+
+四个包（地图内容相同，只差依赖表）：
+
+| 包 | 依赖 | 模型 |
+|---|---|---|
+| P1 | Liberty×2 + kit | 对 |
+| **P2** | P1 + **StarCoop** | **错** ← 元凶 |
+| P3 | P1 + Void | 对 |
+| P4 | P1 + 蒙斯克 | 错 |
+
+蒙斯克只依赖 StarCoop 一条 —— 所以之前「加蒙斯克会错」的真实原因是 **StarCoop**。
+
+### T2. 精确到 id
+
+`dep-conflicts` 在 P2 配置上一跑就出来了：
+
+```text
+CActorUnit ZeratulZealot  被 2 个依赖定义 → 赢家是 #5 StarCoop.SC2Mod
+```
+
+**泽拉图本来就是暴雪的合作指挥官**，所以 StarCoop 里有一套 `ZeratulZealot` ✓ ——
+和自制 kit 撞了。StarCoop 排后面就用它的（普通狂热者 actor）✓，kit 排后面就用 kit 的（精英模型）✓。
+
+**同一条链上共 9 个冲突 id：**
+
+```text
+CAbilEffectInstant ZeratulZealotWhirlwind   CEffectTeleport   ZeratulZealotBlink
+CActorAction      ZeratulZealotAttack       CEffectSet        ZeratulZealotBlinkSet
+CActorModel       ZeratulZealotBlinkOut     CEffectModifyUnit ZeratulZealotBlinkHeal
+CActorUnit        ZeratulZealot            CUpgrade          ZeratulZealotBlinkHeal
+CBehaviorBuff     ZeratulZealotBlinkStun    CButton           ZealotZeratul / ZeratulZealotBlink
+```
+
+### T3. 我早先为什么漏了它
+
+| 漏在哪 | 原因 |
+|---|---|
+| 手工 grep StarCoop | 只查了 `actordata.xml` / `modeldata.xml`，这条在**别的文件**里 |
+| `unit-closure` | 我为了修「同 id 覆盖」把表名合并成 `CUnit+CActorUnit` ✗ —— 结果**匹配不上**别的依赖里的纯 `CActorUnit` |
+
+**两条都是「修一个 bug 引出另一个」的典型。**
+
+### T4. 修法：重命名解耦（不是改优先级）
+
+```bash
+sc2cat rename-id <自制mod> <地图…> --pair 旧id=新id --pair …
+```
+
+实测改了 **14 个文件 / 189 处**，9 个 id 全部加 `sqz` 前缀。
+
+**为什么这样对**：两边各用各的 id，谁也不盖谁 ——
+模型用我们的 ✓，F10 菜单和吸附技能用 StarCoop 的 ✓，**同时成立**。
+
+而「把自家 mod 排最后」是让自家赢**全部** 7321 处冲突 ✗ —— 菜单和技能就是这么没的。
+
+### T5. 客观判据（这条最重要）
+
+```text
+解耦前：总冲突 9163，其中狂热者链上 9 个 id 冲突
+解耦后：总冲突 9163，狂热者链上 0 个
+```
+
+**总数没变** —— 因为我们只动了那一条链。这正是「最小改动」的证明，
+不是「看着好了就行」。任何一次这样的修复都应该能给出这个对比。
+
 ## 汇总：给套件的改进项
 
 | # | 改进 | 状态 |

@@ -9,4 +9,5 @@ pub mod galaxy;
 pub mod locale;
 pub mod map;
 pub mod mpq;
+pub mod rename;
 pub mod triggers;

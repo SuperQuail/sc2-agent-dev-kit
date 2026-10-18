@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use devkit::{catalog, closure, deps, doctor, drift, edit, galaxy, locale, map, mpq, triggers};
+use devkit::{catalog, closure, deps, doctor, drift, edit, galaxy, locale, map, mpq, rename, triggers};
 
 #[derive(Parser)]
 #[command(name = "sc2cat", version, about = "StarCraft II 开发套件 CLI")]
@@ -42,6 +42,15 @@ enum Cmd {
         original: PathBuf,
         /// 我们交付的拷贝
         ours: PathBuf,
+    },
+    /// 把 catalog id 改名（连同引用），让两套数据共存而不是抢优先级
+    RenameId {
+        /// 要改的目录，可给多个（自制 mod、地图…）
+        #[arg(required = true)]
+        roots: Vec<PathBuf>,
+        /// 配对，形如 旧id=新id，可给多个。先匹配长的不会误伤短的（引号/等号定界）
+        #[arg(long = "pair", required = true)]
+        pair: Vec<String>,
     },
     /// 只看**某个单位**的链路：它引用了哪些 id、其中哪些被别的依赖抢走
     UnitClosure {
@@ -263,6 +272,20 @@ fn main() -> Result<()> {
                 println!("没丢东西；上面每一条「加了/改了」都要能解释清楚才能交付");
             } else {
                 anyhow::bail!("丢了 {} 个文件 —— 这是迁移事故，不能交付", d.lost.len());
+            }
+        }
+        Cmd::RenameId { roots, pair } => {
+            let mut pairs = Vec::new();
+            for p in &pair {
+                let (a, b) = p.split_once('=').context("配对要写成 旧id=新id")?;
+                pairs.push(rename::Pair { from: a.to_string(), to: b.to_string() });
+            }
+            // 长的先改，避免短 id 命中长 id 的前缀（虽然定界符已经防了一层）
+            pairs.sort_by(|x, y| y.from.len().cmp(&x.from.len()));
+            let (files, hits) = rename::rename(&roots, &pairs)?;
+            println!("改了 {files} 个文件、{hits} 处");
+            for p in &pairs {
+                println!("  {} -> {}", p.from, p.to);
             }
         }
         Cmd::UnitClosure { map: mp, search, unit, within } => {
