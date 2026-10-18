@@ -27,21 +27,12 @@ pub fn rename(roots: &[PathBuf], pairs: &[Pair]) -> Result<(usize, usize)> {
         for f in walk(root) {
             let Ok(raw) = std::fs::read(&f) else { continue };
             let Ok(text) = String::from_utf8(raw) else { continue };
-            let is_txt = f.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"));
             let mut out = text.clone();
             let mut n = 0usize;
             for p in pairs {
-                if is_txt {
-                    let a = format!("{}=", p.from);
-                    let b = format!("{}=", p.to);
-                    n += out.matches(&a).count();
-                    out = out.replace(&a, &b);
-                } else {
-                    let a = format!("\"{}\"", p.from);
-                    let b = format!("\"{}\"", p.to);
-                    n += out.matches(&a).count();
-                    out = out.replace(&a, &b);
-                }
+                let (o, k) = replace_id(&out, &p.from, &p.to);
+                out = o;
+                n += k;
             }
             if n > 0 && out != text {
                 std::fs::write(&f, out)?;
@@ -51,6 +42,40 @@ pub fn rename(roots: &[PathBuf], pairs: &[Pair]) -> Result<(usize, usize)> {
         }
     }
     Ok((files, hits))
+}
+
+/// 按**标识符边界**替换：前后不是 [A-Za-z0-9_] 才算一个完整的 id。
+///
+/// 这一条规则同时覆盖三种真实写法，而且不误伤别的 id：
+///
+///   id="X"                          前后是引号      → 改
+///   AbilCmd="X,Execute"             前引号后逗号     → 改（漏这处，命令卡按钮消失）
+///   Terms="Abil.X.TargetOn"         前后都是点号     → 改（漏这处，actor 事件不触发）
+///   DefaultButtonFace="ResearchX"   前面是字母       → 不改（那是另一个 id）
+///
+/// 早先按「带引号的整值」替换，前两种全漏了。
+fn replace_id(text: &str, from: &str, to: &str) -> (String, usize) {
+    let cs: Vec<char> = text.chars().collect();
+    let f: Vec<char> = from.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut n = 0usize;
+    let mut i = 0usize;
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    while i < cs.len() {
+        if i + f.len() <= cs.len() && cs[i..i + f.len()] == f[..] {
+            let prev_ok = i == 0 || !ident(cs[i - 1]);
+            let next_ok = i + f.len() >= cs.len() || !ident(cs[i + f.len()]);
+            if prev_ok && next_ok {
+                out.extend(to.chars());
+                i += f.len();
+                n += 1;
+                continue;
+            }
+        }
+        out.push(cs[i]);
+        i += 1;
+    }
+    (out, n)
 }
 
 fn walk(root: &Path) -> Vec<PathBuf> {
